@@ -1,0 +1,454 @@
+package api
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"net/http"
+	"strings"
+
+	"aihub.dev/server/internal/httpx"
+	"aihub.dev/server/internal/notification"
+)
+
+func (s *Server) listRules(w http.ResponseWriter, r *http.Request) {
+	rows, err := s.db.QueryContext(r.Context(), `SELECT id, name, rule_type, enabled, params_json, provider_account_id, created_at, updated_at
+		FROM notification_rules WHERE user_id = ? ORDER BY created_at`, userID(r))
+	if err != nil {
+		httpx.Error(w, http.StatusInternalServerError, "internal", "读取规则失败")
+		return
+	}
+	defer rows.Close()
+	out := make([]map[string]any, 0)
+	for rows.Next() {
+		item, err := scanRule(rows)
+		if err != nil {
+			httpx.Error(w, http.StatusInternalServerError, "internal", "读取规则失败")
+			return
+		}
+		out = append(out, item)
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"rules": out})
+}
+
+func scanRule(rows *sql.Rows) (map[string]any, error) {
+	var id, name, typ, params, created, updated string
+	var enabled int
+	var acct sql.NullString
+	if err := rows.Scan(&id, &name, &typ, &enabled, &params, &acct, &created, &updated); err != nil {
+		return nil, err
+	}
+	var p any
+	_ = json.Unmarshal([]byte(params), &p)
+	return map[string]any{
+		"id":                  id,
+		"name":                name,
+		"rule_type":           typ,
+		"enabled":             enabled == 1,
+		"params":              p,
+		"provider_account_id": nullStr(acct),
+		"created_at":          created,
+		"updated_at":          updated,
+	}, nil
+}
+
+func (s *Server) createRule(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Name              string              `json:"name"`
+		RuleType          string              `json:"rule_type"`
+		Enabled           *bool               `json:"enabled"`
+		Params            notification.Params `json:"params"`
+		ProviderAccountID string              `json:"provider_account_id"`
+	}
+	if err := httpx.Decode(r, &req); err != nil {
+		httpx.Error(w, http.StatusBadRequest, "invalid_json", "请求格式不正确")
+		return
+	}
+	if strings.TrimSpace(req.Name) == "" || strings.TrimSpace(req.RuleType) == "" {
+		httpx.Error(w, http.StatusBadRequest, "invalid_input", "规则名称和类型必填")
+		return
+	}
+	raw, _ := json.Marshal(req.Params)
+	enabled := 1
+	if req.Enabled != nil && !*req.Enabled {
+		enabled = 0
+	}
+	var acct any
+	if req.ProviderAccountID != "" {
+		acct = req.ProviderAccountID
+	}
+	id := httpx.NewID("rule")
+	now := s.nowRFC()
+	_, err := s.db.ExecContext(r.Context(), `INSERT INTO notification_rules (id, user_id, name, rule_type, enabled, params_json, provider_account_id, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, id, userID(r), req.Name, req.RuleType, enabled, string(raw), acct, now, now)
+	if err != nil {
+		httpx.Error(w, http.StatusInternalServerError, "internal", "创建规则失败")
+		return
+	}
+	_ = s.evaluateUser(r.Context(), userID(r))
+	httpx.WriteJSON(w, http.StatusCreated, map[string]any{"id": id})
+}
+
+func (s *Server) patchRule(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Name    *string              `json:"name"`
+		Enabled *bool                `json:"enabled"`
+		Params  *notification.Params `json:"params"`
+	}
+	if err := httpx.Decode(r, &req); err != nil {
+		httpx.Error(w, http.StatusBadRequest, "invalid_json", "请求格式不正确")
+		return
+	}
+	id := r.PathValue("id")
+	var curName, curType, curParams string
+	var enabled int
+	err := s.db.QueryRowContext(r.Context(), `SELECT name, rule_type, enabled, params_json FROM notification_rules WHERE id = ? AND user_id = ?`, id, userID(r)).
+		Scan(&curName, &curType, &enabled, &curParams)
+	if err == sql.ErrNoRows {
+		httpx.Error(w, http.StatusNotFound, "not_found", "规则不存在")
+		return
+	}
+	if err != nil {
+		httpx.Error(w, http.StatusInternalServerError, "internal", "读取规则失败")
+		return
+	}
+	if req.Name != nil {
+		curName = *req.Name
+	}
+	if req.Enabled != nil {
+		enabled = 0
+		if *req.Enabled {
+			enabled = 1
+		}
+	}
+	if req.Params != nil {
+		raw, _ := json.Marshal(req.Params)
+		curParams = string(raw)
+	}
+	_, err = s.db.ExecContext(r.Context(), `UPDATE notification_rules SET name = ?, enabled = ?, params_json = ?, updated_at = ? WHERE id = ?`,
+		curName, enabled, curParams, s.nowRFC(), id)
+	if err != nil {
+		httpx.Error(w, http.StatusInternalServerError, "internal", "更新规则失败")
+		return
+	}
+	_ = s.evaluateUser(r.Context(), userID(r))
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Server) deleteRule(w http.ResponseWriter, r *http.Request) {
+	res, err := s.db.ExecContext(r.Context(), `DELETE FROM notification_rules WHERE id = ? AND user_id = ?`, r.PathValue("id"), userID(r))
+	if err != nil {
+		httpx.Error(w, http.StatusInternalServerError, "internal", "删除失败")
+		return
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		httpx.Error(w, http.StatusNotFound, "not_found", "规则不存在")
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Server) previewRule(w http.ResponseWriter, r *http.Request) {
+	rule, err := s.loadRule(r.Context(), userID(r), r.PathValue("id"))
+	if err != nil {
+		httpx.Error(w, http.StatusNotFound, "not_found", "规则不存在")
+		return
+	}
+	s.writePreview(w, r, rule)
+}
+
+func (s *Server) previewRuleBody(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		RuleType          string              `json:"rule_type"`
+		Params            notification.Params `json:"params"`
+		ProviderAccountID string              `json:"provider_account_id"`
+	}
+	if err := httpx.Decode(r, &req); err != nil {
+		httpx.Error(w, http.StatusBadRequest, "invalid_json", "请求格式不正确")
+		return
+	}
+	var acct *string
+	if req.ProviderAccountID != "" {
+		acct = &req.ProviderAccountID
+	}
+	s.writePreview(w, r, notification.Rule{Type: req.RuleType, Params: req.Params, ProviderAccountID: acct, Enabled: true})
+}
+
+func (s *Server) writePreview(w http.ResponseWriter, r *http.Request, rule notification.Rule) {
+	subs, err := s.listSubjects(r.Context(), userID(r))
+	if err != nil {
+		httpx.Error(w, http.StatusInternalServerError, "internal", "读取额度失败")
+		return
+	}
+	now := s.clock.Now()
+	matches := make([]map[string]any, 0)
+	would := false
+	for _, sub := range subs {
+		if rule.ProviderAccountID != nil && *rule.ProviderAccountID != sub.AccountID {
+			continue
+		}
+		if skipSubject(rule, sub) {
+			continue
+		}
+		res := notification.Evaluate(rule, sub, now)
+		if res.WouldFire {
+			would = true
+		}
+		matches = append(matches, map[string]any{
+			"provider":             sub.ProviderName,
+			"account":              sub.AccountName,
+			"would_fire":           res.WouldFire,
+			"reason":               res.Reason,
+			"estimated_trigger_at": timeOut(res.EstimatedTriggerAt),
+			"dedupe_key":           res.DedupeKey,
+		})
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{
+		"would_fire": would,
+		"matches":    matches,
+		"evaluated_at": now.UTC().Format("2006-01-02T15:04:05Z07:00"),
+	})
+}
+
+func (s *Server) listNotifications(w http.ResponseWriter, r *http.Request) {
+	rows, err := s.db.QueryContext(r.Context(), `SELECT id, rule_id, provider_account_id, quota_bucket_id, title, body, severity, dedupe_key, status, created_at
+		FROM notifications WHERE user_id = ? ORDER BY created_at DESC LIMIT 100`, userID(r))
+	if err != nil {
+		httpx.Error(w, http.StatusInternalServerError, "internal", "读取通知失败")
+		return
+	}
+	defer rows.Close()
+	out := make([]map[string]any, 0)
+	for rows.Next() {
+		var id, title, body, sev, key, status, created string
+		var ruleID, acct, bucket sql.NullString
+		if err := rows.Scan(&id, &ruleID, &acct, &bucket, &title, &body, &sev, &key, &status, &created); err != nil {
+			httpx.Error(w, http.StatusInternalServerError, "internal", "读取通知失败")
+			return
+		}
+		out = append(out, map[string]any{
+			"id":                  id,
+			"rule_id":             nullStr(ruleID),
+			"provider_account_id": nullStr(acct),
+			"quota_bucket_id":     nullStr(bucket),
+			"title":               title,
+			"body":                body,
+			"severity":            sev,
+			"dedupe_key":          key,
+			"status":              status,
+			"created_at":          created,
+		})
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"notifications": out})
+}
+
+func (s *Server) readNotification(w http.ResponseWriter, r *http.Request) {
+	_, err := s.db.ExecContext(r.Context(), `UPDATE notifications SET status = 'read' WHERE id = ? AND user_id = ?`, r.PathValue("id"), userID(r))
+	if err != nil {
+		httpx.Error(w, http.StatusInternalServerError, "internal", "更新失败")
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Server) readAllNotifications(w http.ResponseWriter, r *http.Request) {
+	_, err := s.db.ExecContext(r.Context(), `UPDATE notifications SET status = 'read' WHERE user_id = ?`, userID(r))
+	if err != nil {
+		httpx.Error(w, http.StatusInternalServerError, "internal", "更新失败")
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Server) loadRule(ctx context.Context, uid, id string) (notification.Rule, error) {
+	var name, typ, params string
+	var enabled int
+	var acct sql.NullString
+	err := s.db.QueryRowContext(ctx, `SELECT name, rule_type, enabled, params_json, provider_account_id FROM notification_rules WHERE id = ? AND user_id = ?`, id, uid).
+		Scan(&name, &typ, &enabled, &params, &acct)
+	if err != nil {
+		return notification.Rule{}, err
+	}
+	p, _ := notification.ParseParams(params)
+	rule := notification.Rule{ID: id, Name: name, Type: typ, Enabled: enabled == 1, Params: p}
+	if acct.Valid {
+		v := acct.String
+		rule.ProviderAccountID = &v
+	}
+	return rule, nil
+}
+
+func skipSubject(rule notification.Rule, sub notification.Subject) bool {
+	switch rule.Type {
+	case notification.TypeLowQuota, notification.TypeResetSoonUnused, notification.TypeExpireSoonUnused, notification.TypeStale:
+		return sub.BucketID == ""
+	case notification.TypeRenewalSoon:
+		return sub.EntitlementID == ""
+	default:
+		return true
+	}
+}
+
+func (s *Server) listSubjects(ctx context.Context, uid string) ([]notification.Subject, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT a.id, a.display_name, p.display_name,
+		       COALESCE(b.id, ''), COALESCE(b.scope_key, ''),
+		       COALESCE(e.id, ''), COALESCE(e.plan_name, ''),
+		       b.limit_value, s.remaining_value, s.remaining_ratio,
+		       b.reset_at, b.expires_at, e.renews_at, s.observed_at
+		FROM provider_accounts a
+		JOIN providers p ON p.id = a.provider_id
+		LEFT JOIN entitlements e ON e.id = (
+			SELECT id FROM entitlements WHERE provider_account_id = a.id ORDER BY created_at DESC LIMIT 1
+		)
+		LEFT JOIN quota_buckets b ON b.provider_account_id = a.id
+		LEFT JOIN usage_snapshots s ON s.id = (
+			SELECT id FROM usage_snapshots WHERE quota_bucket_id = b.id ORDER BY observed_at DESC LIMIT 1
+		)
+		WHERE a.user_id = ?`, uid)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]notification.Subject, 0)
+	for rows.Next() {
+		var sub notification.Subject
+		var limit, remain, ratio sql.NullFloat64
+		var reset, exp, renew, obs sql.NullString
+		if err := rows.Scan(&sub.AccountID, &sub.AccountName, &sub.ProviderName, &sub.BucketID, &sub.ScopeKey,
+			&sub.EntitlementID, &sub.PlanName, &limit, &remain, &ratio, &reset, &exp, &renew, &obs); err != nil {
+			return nil, err
+		}
+		sub.LimitValue = nullF64(limit)
+		sub.RemainingValue = nullF64(remain)
+		sub.RemainingRatio = nullF64(ratio)
+		sub.ResetAt = nullTime(reset)
+		sub.ExpiresAt = nullTime(exp)
+		sub.RenewsAt = nullTime(renew)
+		sub.ObservedAt = nullTime(obs)
+		out = append(out, sub)
+	}
+	return out, rows.Err()
+}
+
+func (s *Server) evaluateUser(ctx context.Context, uid string) error {
+	rulesRows, err := s.db.QueryContext(ctx, `SELECT id, name, rule_type, enabled, params_json, provider_account_id FROM notification_rules WHERE user_id = ?`, uid)
+	if err != nil {
+		return err
+	}
+	defer rulesRows.Close()
+	var rules []notification.Rule
+	for rulesRows.Next() {
+		var id, name, typ, params string
+		var enabled int
+		var acct sql.NullString
+		if err := rulesRows.Scan(&id, &name, &typ, &enabled, &params, &acct); err != nil {
+			return err
+		}
+		p, _ := notification.ParseParams(params)
+		rule := notification.Rule{ID: id, Name: name, Type: typ, Enabled: enabled == 1, Params: p}
+		if acct.Valid {
+			v := acct.String
+			rule.ProviderAccountID = &v
+		}
+		rules = append(rules, rule)
+	}
+	if err := rulesRows.Err(); err != nil {
+		return err
+	}
+
+	subs, err := s.listSubjects(ctx, uid)
+	if err != nil {
+		return err
+	}
+	active := map[string]struct{}{}
+	aRows, err := s.db.QueryContext(ctx, `SELECT dedupe_key FROM alert_states WHERE user_id = ?`, uid)
+	if err != nil {
+		return err
+	}
+	for aRows.Next() {
+		var k string
+		if err := aRows.Scan(&k); err != nil {
+			_ = aRows.Close()
+			return err
+		}
+		active[k] = struct{}{}
+	}
+	_ = aRows.Close()
+
+	now := s.clock.Now()
+	wanted := map[string]struct{}{}
+	for _, rule := range rules {
+		if !rule.Enabled {
+			continue
+		}
+		for _, sub := range subs {
+			if rule.ProviderAccountID != nil && *rule.ProviderAccountID != sub.AccountID {
+				continue
+			}
+			if skipSubject(rule, sub) {
+				continue
+			}
+			res := notification.Evaluate(rule, sub, now)
+			if !res.WouldFire {
+				continue
+			}
+			wanted[res.DedupeKey] = struct{}{}
+			if _, ok := active[res.DedupeKey]; ok {
+				continue
+			}
+			nid := httpx.NewID("ntf")
+			ts := now.UTC().Format("2006-01-02T15:04:05Z07:00")
+			var bucket any
+			if res.BucketID != "" {
+				bucket = res.BucketID
+			}
+			var acct any
+			if res.AccountID != "" {
+				acct = res.AccountID
+			}
+			_, err = s.db.ExecContext(ctx, `INSERT INTO notifications (id, user_id, rule_id, provider_account_id, quota_bucket_id, title, body, severity, dedupe_key, status, created_at)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'unread', ?)`, nid, uid, rule.ID, acct, bucket, res.Title, res.Body, res.Severity, res.DedupeKey, ts)
+			if err != nil {
+				return err
+			}
+			_, err = s.db.ExecContext(ctx, `INSERT INTO alert_states (user_id, dedupe_key, notification_id, created_at) VALUES (?, ?, ?, ?)`, uid, res.DedupeKey, nid, ts)
+			if err != nil {
+				return err
+			}
+			active[res.DedupeKey] = struct{}{}
+		}
+	}
+	for key := range active {
+		if _, ok := wanted[key]; ok {
+			continue
+		}
+		if _, err := s.db.ExecContext(ctx, `DELETE FROM alert_states WHERE user_id = ? AND dedupe_key = ?`, uid, key); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Server) EvaluateAll(ctx context.Context) error {
+	rows, err := s.db.QueryContext(ctx, `SELECT id FROM users`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return err
+		}
+		ids = append(ids, id)
+	}
+	for _, id := range ids {
+		if err := s.evaluateUser(ctx, id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
