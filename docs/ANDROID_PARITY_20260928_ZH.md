@@ -11,8 +11,8 @@
 
 ## 验证与边界
 
-- Flutter 静态分析、组件测试、基础单元测试与 Android APK 编译是源码/构建验证；需要连接真机后才能确认点击、通知、网络及布局效果。
+- Flutter 静态分析无问题；10 项测试通过，2 项需要预置账户的真实服务器测试跳过。Android 0.3.0 Release APK 构建并通过签名校验。这些是源码/构建验证；需要连接真机后才能确认点击、通知、网络及布局效果。
 - 本机 ADB 未发现手机或模拟器。公网 HTTPS 和手机跨网络同步未验证。
-- Release APK 禁止明文 HTTP；本地联调需 debug APK、`adb reverse tcp:8080 tcp:8080` 和手机服务器地址 `http://127.0.0.1:8080`。Release 使用调试签名，尚非应用商店发布包。
+- Release APK 禁止明文 HTTP；本地联调需 debug APK、`adb reverse tcp:8080 tcp:8080` 和手机服务器地址 `http://127.0.0.1:8080`。Debug APK 本轮未构建成功：Gradle 缺少 Flutter debug engine 依赖，在线下载未完成，离线模式确认缓存缺失。Release 使用调试签名，尚非应用商店发布包。
 - 手机端没有 Codex/Cursor 本机采集能力；采集由已绑定的桌面 Bridge 完成。系统终止 App 后的远程推送、文件导入、历史 CSV 导出与管理员后台仍未同步到 Android。
 - 手工账户/额度写入目前要求在线，离线便笺仍按原有机制同步。正式实机验收需另行完成。
