@@ -3,20 +3,20 @@ package quota
 import "time"
 
 const (
-	StatusHealthy           = "healthy"
-	StatusLow               = "low"
-	StatusResetSoonUnused   = "reset_soon_unused"
-	StatusExpireSoonUnused  = "expire_soon_unused"
-	StatusStale             = "stale"
-	StatusUnknown           = "unknown"
+	StatusHealthy          = "healthy"
+	StatusLow              = "low"
+	StatusResetSoonUnused  = "reset_soon_unused"
+	StatusExpireSoonUnused = "expire_soon_unused"
+	StatusStale            = "stale"
+	StatusUnknown          = "unknown"
 )
 
 const (
-	StaleAfter        = 7 * 24 * time.Hour
-	LowRatioDefault   = 0.20
-	ResetSoonWindow   = 12 * time.Hour
-	ResetUnusedRatio  = 0.30
-	ExpireSoonWindow  = 24 * time.Hour
+	StaleAfter       = 7 * 24 * time.Hour
+	LowRatioDefault  = 0.20
+	ResetSoonWindow  = 12 * time.Hour
+	ResetUnusedRatio = 0.30
+	ExpireSoonWindow = 24 * time.Hour
 )
 
 type BucketView struct {

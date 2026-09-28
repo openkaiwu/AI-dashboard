@@ -21,14 +21,14 @@ func SeedProviders(ctx context.Context, db *sql.DB) error {
 		{"prov_github", "github-copilot", "GitHub Copilot", "ide", "https://github.com/features/copilot"},
 	}
 	for _, p := range providers {
-		_, err := db.ExecContext(ctx, `INSERT OR IGNORE INTO providers (id, slug, display_name, category, homepage, metadata_json) VALUES (?, ?, ?, ?, ?, '{}')`,
+		_, err := db.ExecContext(ctx, `INSERT INTO providers (id, slug, display_name, category, homepage, metadata_json) VALUES ($1, $2, $3, $4, $5, '{}') ON CONFLICT DO NOTHING`,
 			p.id, p.slug, p.name, p.cat, p.home)
 		if err != nil {
 			return err
 		}
 		for _, cap := range []string{"quota.pull", "entitlement.pull"} {
-			_, err = db.ExecContext(ctx, `INSERT OR IGNORE INTO provider_capabilities (provider_id, capability, support_level, acquisition_mode, connector_version)
-				VALUES (?, ?, 'partial', 'manual', 'mvp-0')`, p.id, cap)
+			_, err = db.ExecContext(ctx, `INSERT INTO provider_capabilities (provider_id, capability, support_level, acquisition_mode, connector_version)
+				VALUES ($1, $2, 'partial', 'manual', 'mvp-0') ON CONFLICT DO NOTHING`, p.id, cap)
 			if err != nil {
 				return err
 			}
@@ -40,7 +40,7 @@ func SeedProviders(ctx context.Context, db *sql.DB) error {
 func SeedDemo(ctx context.Context, db *sql.DB, srv *Server) error {
 	email := "demo@aihub.local"
 	var existing string
-	err := db.QueryRowContext(ctx, `SELECT id FROM users WHERE email = ?`, email).Scan(&existing)
+	err := db.QueryRowContext(ctx, `SELECT id FROM users WHERE email = $1`, email).Scan(&existing)
 	if err == nil {
 		return srv.evaluateUser(ctx, existing)
 	}
@@ -54,7 +54,7 @@ func SeedDemo(ctx context.Context, db *sql.DB, srv *Server) error {
 	}
 	uid := httpx.NewID("usr")
 	now := srv.nowRFC()
-	if _, err := db.ExecContext(ctx, `INSERT INTO users (id, email, password_hash, created_at) VALUES (?, ?, ?, ?)`, uid, email, string(hash), now); err != nil {
+	if _, err := db.ExecContext(ctx, `INSERT INTO users (id, email, password_hash, created_at) VALUES ($1, $2, $3, $4)`, uid, email, string(hash), now); err != nil {
 		return err
 	}
 	if err := insertDefaultRules(ctx, db, uid, now); err != nil {
@@ -84,12 +84,12 @@ func SeedDemo(ctx context.Context, db *sql.DB, srv *Server) error {
 	for _, a := range accounts {
 		acctID := httpx.NewID("acct")
 		if _, err := db.ExecContext(ctx, `INSERT INTO provider_accounts (id, user_id, provider_id, display_name, status, created_at, updated_at)
-			VALUES (?, ?, ?, ?, 'active', ?, ?)`, acctID, uid, a.provider, a.name, now, now); err != nil {
+			VALUES ($1, $2, $3, $4, 'active', $5, $6)`, acctID, uid, a.provider, a.name, now, now); err != nil {
 			return err
 		}
 		entID := httpx.NewID("ent")
 		if _, err := db.ExecContext(ctx, `INSERT INTO entitlements (id, provider_account_id, plan_code, plan_name, renews_at, expires_at, source_type, created_at)
-			VALUES (?, ?, ?, ?, ?, ?, 'user_manual', ?)`, entID, acctID, a.plan, a.plan, argTime(a.renew), argTime(a.expire), now); err != nil {
+			VALUES ($1, $2, $3, $4, $5, $6, 'user_manual', $7)`, entID, acctID, a.plan, a.plan, argTime(a.renew), argTime(a.expire), now); err != nil {
 			return err
 		}
 		q := quotaInput{
@@ -110,15 +110,15 @@ func SeedDemo(ctx context.Context, db *sql.DB, srv *Server) error {
 			return err
 		}
 		if a.observed != nil {
-			_, err = db.ExecContext(ctx, `UPDATE usage_snapshots SET observed_at = ? WHERE quota_bucket_id = (
-				SELECT id FROM quota_buckets WHERE provider_account_id = ? LIMIT 1
+			_, err = db.ExecContext(ctx, `UPDATE usage_snapshots SET observed_at = $1 WHERE quota_bucket_id = (
+				SELECT id FROM quota_buckets WHERE provider_account_id = $2 LIMIT 1
 			)`, a.observed.Format(time.RFC3339), acctID)
 			if err != nil {
 				return err
 			}
 		}
 		var bucketID string
-		if err := db.QueryRowContext(ctx, `SELECT id FROM quota_buckets WHERE provider_account_id = ? LIMIT 1`, acctID).Scan(&bucketID); err == nil {
+		if err := db.QueryRowContext(ctx, `SELECT id FROM quota_buckets WHERE provider_account_id = $1 LIMIT 1`, acctID).Scan(&bucketID); err == nil {
 			latest := t
 			if a.observed != nil {
 				latest = *a.observed
@@ -132,7 +132,7 @@ func SeedDemo(ctx context.Context, db *sql.DB, srv *Server) error {
 				ratio := remain / a.limit
 				used := a.limit - remain
 				_, _ = db.ExecContext(ctx, `INSERT INTO usage_snapshots (id, quota_bucket_id, observed_at, used_value, remaining_value, remaining_ratio, note, raw_value_json, source_type, created_at)
-					VALUES (?, ?, ?, ?, ?, ?, '', '{}', 'user_manual', ?)`,
+					VALUES ($1, $2, $3, $4, $5, $6, '', '{}', 'user_manual', $7)`,
 					httpx.NewID("snap"), bucketID, when.Format(time.RFC3339), used, remain, ratio, now)
 			}
 		}

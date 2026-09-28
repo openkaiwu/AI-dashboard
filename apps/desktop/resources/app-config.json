@@ -1,0 +1,7 @@
+{
+  "uiMode": "ask",
+  "cloudServer": "https://hub.example.com",
+  "profileId": "public-cloud",
+  "profileName": "公网 AI Hub",
+  "bridgeIntervalSeconds": 300
+}

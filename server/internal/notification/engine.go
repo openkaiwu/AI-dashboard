@@ -53,7 +53,8 @@ type Subject struct {
 	ResetAt        *time.Time
 	ExpiresAt      *time.Time
 	RenewsAt       *time.Time
-	ObservedAt     *time.Time
+	ObservedAt        *time.Time
+	CollectionStatus  string
 }
 
 type Result struct {

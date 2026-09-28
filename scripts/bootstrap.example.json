@@ -1,0 +1,7 @@
+{
+  "cloudServer": "https://hub.example.com",
+  "email": "your@email.com",
+  "password": "your-password-here",
+  "deviceName": "我的电脑",
+  "bridgeName": "我的电脑"
+}

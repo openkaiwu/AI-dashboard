@@ -12,17 +12,17 @@ import (
 )
 
 type quotaInput struct {
-	ScopeKey              string   `json:"scope_key"`
-	QuotaType             string   `json:"quota_type"`
-	Unit                  string   `json:"unit"`
-	LimitValue            *float64 `json:"limit_value"`
-	RemainingValue        *float64 `json:"remaining_value"`
-	RemainingRatio        *float64 `json:"remaining_ratio"`
-	ResetPolicy           string   `json:"reset_policy"`
-	ResetAt               string   `json:"reset_at"`
-	ExpiresAt             string   `json:"expires_at"`
-	RollingWindowSeconds  *int     `json:"rolling_window_seconds"`
-	Note                  string   `json:"note"`
+	ScopeKey             string   `json:"scope_key"`
+	QuotaType            string   `json:"quota_type"`
+	Unit                 string   `json:"unit"`
+	LimitValue           *float64 `json:"limit_value"`
+	RemainingValue       *float64 `json:"remaining_value"`
+	RemainingRatio       *float64 `json:"remaining_ratio"`
+	ResetPolicy          string   `json:"reset_policy"`
+	ResetAt              string   `json:"reset_at"`
+	ExpiresAt            string   `json:"expires_at"`
+	RollingWindowSeconds *int     `json:"rolling_window_seconds"`
+	Note                 string   `json:"note"`
 }
 
 type createAccountReq struct {
@@ -66,7 +66,7 @@ func (s *Server) listProviders(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) providerCaps(r *http.Request, providerID string) ([]map[string]any, error) {
-	rows, err := s.db.QueryContext(r.Context(), `SELECT capability, support_level, acquisition_mode, connector_version FROM provider_capabilities WHERE provider_id = ?`, providerID)
+	rows, err := s.db.QueryContext(r.Context(), `SELECT capability, support_level, acquisition_mode, connector_version FROM provider_capabilities WHERE provider_id = $1`, providerID)
 	if err != nil {
 		return nil, err
 	}
@@ -126,7 +126,7 @@ func (s *Server) createAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var exists int
-	if err := s.db.QueryRowContext(r.Context(), `SELECT COUNT(*) FROM providers WHERE id = ?`, req.ProviderID).Scan(&exists); err != nil || exists == 0 {
+	if err := s.db.QueryRowContext(r.Context(), `SELECT COUNT(*) FROM providers WHERE id = $1`, req.ProviderID).Scan(&exists); err != nil || exists == 0 {
 		httpx.Error(w, http.StatusBadRequest, "invalid_input", "未知平台")
 		return
 	}
@@ -141,7 +141,7 @@ func (s *Server) createAccount(w http.ResponseWriter, r *http.Request) {
 	}
 	defer func() { _ = tx.Rollback() }()
 	_, err = tx.ExecContext(ctx, `INSERT INTO provider_accounts (id, user_id, provider_id, display_name, external_account_hint, region, status, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?)`, acctID, uid, req.ProviderID, req.DisplayName, req.ExternalAccountHint, req.Region, now, now)
+		VALUES ($1, $2, $3, $4, $5, $6, 'active', $7, $8)`, acctID, uid, req.ProviderID, req.DisplayName, req.ExternalAccountHint, req.Region, now, now)
 	if err != nil {
 		logErr("insert account", err, httpx.RequestID(r))
 		httpx.Error(w, http.StatusInternalServerError, "internal", "创建账户失败")
@@ -158,7 +158,7 @@ func (s *Server) createAccount(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		_, err = tx.ExecContext(ctx, `INSERT INTO entitlements (id, provider_account_id, plan_code, plan_name, starts_at, renews_at, expires_at, source_type, created_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, 'user_manual', ?)`,
+			VALUES ($1, $2, $3, $4, $5, $6, $7, 'user_manual', $8)`,
 			entID, acctID, req.PlanCode, nz(req.PlanName, "未命名套餐"), argTime(starts), argTime(renews), argTime(expires), now)
 		if err != nil {
 			logErr("insert entitlement", err, httpx.RequestID(r))
@@ -204,7 +204,7 @@ func (s *Server) getAccountByID(w http.ResponseWriter, r *http.Request, id strin
 }
 
 func (s *Server) deleteAccount(w http.ResponseWriter, r *http.Request) {
-	res, err := s.db.ExecContext(r.Context(), `DELETE FROM provider_accounts WHERE id = ? AND user_id = ?`, r.PathValue("id"), userID(r))
+	res, err := s.db.ExecContext(r.Context(), `DELETE FROM provider_accounts WHERE id = $1 AND user_id = $2`, r.PathValue("id"), userID(r))
 	if err != nil {
 		httpx.Error(w, http.StatusInternalServerError, "internal", "删除失败")
 		return
@@ -225,13 +225,13 @@ func (s *Server) createBucket(w http.ResponseWriter, r *http.Request) {
 	}
 	acctID := r.PathValue("id")
 	var owner string
-	err := s.db.QueryRowContext(r.Context(), `SELECT user_id FROM provider_accounts WHERE id = ?`, acctID).Scan(&owner)
+	err := s.db.QueryRowContext(r.Context(), `SELECT user_id FROM provider_accounts WHERE id = $1`, acctID).Scan(&owner)
 	if err == sql.ErrNoRows || owner != userID(r) {
 		httpx.Error(w, http.StatusNotFound, "not_found", "账户不存在")
 		return
 	}
 	var entID sql.NullString
-	_ = s.db.QueryRowContext(r.Context(), `SELECT id FROM entitlements WHERE provider_account_id = ? ORDER BY created_at DESC LIMIT 1`, acctID).Scan(&entID)
+	_ = s.db.QueryRowContext(r.Context(), `SELECT id FROM entitlements WHERE provider_account_id = $1 ORDER BY created_at DESC LIMIT 1`, acctID).Scan(&entID)
 	now := s.nowRFC()
 	if err := insertBucketTx(r.Context(), s.db, acctID, nullStr(entID), req, now); err != nil {
 		if err == errBadTime {
@@ -270,7 +270,7 @@ func insertBucketTx(ctx context.Context, tx execer, acctID, entID string, q quot
 		rolling = *q.RollingWindowSeconds
 	}
 	_, err = tx.ExecContext(ctx, `INSERT INTO quota_buckets (id, provider_account_id, entitlement_id, scope_key, quota_type, unit, limit_value, reset_policy, reset_at, expires_at, rolling_window_seconds, source_type, confidence, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'user_manual', 'high', ?, ?)`,
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'user_manual', 'high', $12, $13)`,
 		bucketID, acctID, ent, scope, qtype, unit, argF64(q.LimitValue), policy, argTime(resetAt), argTime(expiresAt), rolling, now, now)
 	if err != nil {
 		return err
@@ -291,7 +291,7 @@ func insertBucketTx(ctx context.Context, tx execer, acctID, entID string, q quot
 		ratio = quota.RemainingRatio(q.LimitValue, q.RemainingValue, nil)
 	}
 	_, err = tx.ExecContext(ctx, `INSERT INTO usage_snapshots (id, quota_bucket_id, observed_at, used_value, remaining_value, remaining_ratio, note, raw_value_json, source_type, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, '{}', 'user_manual', ?)`,
+		VALUES ($1, $2, $3, $4, $5, $6, $7, '{}', 'user_manual', $8)`,
 		httpx.NewID("snap"), bucketID, now, argF64(used), argF64(q.RemainingValue), argF64(ratio), q.Note, now)
 	return err
 }

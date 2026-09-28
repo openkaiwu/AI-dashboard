@@ -1,0 +1,31 @@
+name: M0 Gate
+on: [push, pull_request]
+jobs:
+  foundation:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: integration-only
+          POSTGRES_DB: aihub_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 3s --health-retries 20
+    env:
+      AIHUB_TEST_DATABASE_URL: postgres://postgres:integration-only@127.0.0.1:5432/aihub_test?sslmode=disable
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.47.5'
+          channel: stable
+      - run: sudo apt-get update && sudo apt-get install -y libsqlite3-dev postgresql-client
+      - run: npm ci --prefix apps/web && npm test --prefix apps/web && npm run build --prefix apps/web
+      - run: cp -R apps/web/dist/. server/webassets/dist/ && bash scripts/gate.sh

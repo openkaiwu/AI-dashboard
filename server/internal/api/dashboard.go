@@ -29,7 +29,7 @@ func (s *Server) loadDashboard(ctx context.Context, uid string) (map[string]any,
 		       p.id, p.slug, p.display_name,
 		       e.id, e.plan_name, e.plan_code, e.renews_at, e.expires_at,
 		       b.id, b.scope_key, b.quota_type, b.unit, b.limit_value, b.reset_policy, b.reset_at, b.expires_at, b.source_type, b.confidence,
-		       s.remaining_value, s.remaining_ratio, s.used_value, s.observed_at, s.note, s.source_type
+		       s.remaining_value, s.remaining_ratio, s.used_value, s.observed_at, s.note, s.source_type, COALESCE(s.raw_value_json, '{}')
 		FROM provider_accounts a
 		JOIN providers p ON p.id = a.provider_id
 		LEFT JOIN entitlements e ON e.id = (
@@ -39,7 +39,7 @@ func (s *Server) loadDashboard(ctx context.Context, uid string) (map[string]any,
 		LEFT JOIN usage_snapshots s ON s.id = (
 			SELECT id FROM usage_snapshots WHERE quota_bucket_id = b.id ORDER BY observed_at DESC LIMIT 1
 		)
-		WHERE a.user_id = ?
+		WHERE a.user_id = $1
 		ORDER BY a.created_at DESC, b.created_at ASC
 	`, uid)
 	if err != nil {
@@ -73,14 +73,14 @@ func (s *Server) loadDashboard(ctx context.Context, uid string) (map[string]any,
 			breset, bexp, bsrc, conf                sql.NullString
 			limit                                   sql.NullFloat64
 			remain, ratio, used                     sql.NullFloat64
-			obs, note, ssrc                         sql.NullString
+			obs, note, ssrc, snapRaw                 sql.NullString
 		)
 		if err := rows.Scan(
 			&aid, &aname, &hint, &region, &astatus, &aupd,
 			&pid, &pslug, &pname,
 			&eid, &planName, &planCode, &renews, &eexp,
 			&bid, &scope, &qtype, &unit, &limit, &policy, &breset, &bexp, &bsrc, &conf,
-			&remain, &ratio, &used, &obs, &note, &ssrc,
+			&remain, &ratio, &used, &obs, &note, &ssrc, &snapRaw,
 		); err != nil {
 			return nil, err
 		}
@@ -121,6 +121,10 @@ func (s *Server) loadDashboard(ctx context.Context, uid string) (map[string]any,
 			ObservedAt:     nullTime(obs),
 		}
 		st := quota.ComputeStatus(view, now)
+		collectionStatus := snapshotCollectionStatus(nullStr(note), nullStr(snapRaw))
+		if collectionStatus == "stale" || collectionStatus == "unavailable" || collectionStatus == "unknown" {
+			st = quota.StatusStale
+		}
 		if statusRank(st) < statusRank(item.status) || len(item.data["buckets"].([]map[string]any)) == 0 {
 			item.status = st
 		}
@@ -129,22 +133,23 @@ func (s *Server) loadDashboard(ctx context.Context, uid string) (map[string]any,
 			src = nullStr(bsrc)
 		}
 		bucket := map[string]any{
-			"id":               bid.String,
-			"scope_key":        nullStr(scope),
-			"quota_type":       nullStr(qtype),
-			"unit":             nullStr(unit),
-			"limit_value":      f64Out(nullF64(limit)),
-			"remaining_value":  f64Out(nullF64(remain)),
-			"remaining_ratio":  f64Out(nullF64(ratio)),
-			"used_value":       f64Out(nullF64(used)),
-			"reset_policy":     nullStr(policy),
-			"reset_at":         timeOut(nullTime(breset)),
-			"expires_at":       timeOut(nullTime(bexp)),
-			"source_type":      src,
-			"confidence":       nullStr(conf),
-			"observed_at":      timeOut(nullTime(obs)),
-			"note":             nullStr(note),
-			"status":           st,
+			"id":              bid.String,
+			"scope_key":       nullStr(scope),
+			"quota_type":      nullStr(qtype),
+			"unit":            nullStr(unit),
+			"limit_value":     f64Out(nullF64(limit)),
+			"remaining_value": f64Out(nullF64(remain)),
+			"remaining_ratio": f64Out(nullF64(ratio)),
+			"used_value":      f64Out(nullF64(used)),
+			"reset_policy":    nullStr(policy),
+			"reset_at":        timeOut(nullTime(breset)),
+			"expires_at":      timeOut(nullTime(bexp)),
+			"source_type":     src,
+			"confidence":      nullStr(conf),
+			"observed_at":     timeOut(nullTime(obs)),
+			"note":               nullStr(note),
+			"collection_status":  collectionStatus,
+			"status":             st,
 		}
 		item.data["buckets"] = append(item.data["buckets"].([]map[string]any), bucket)
 	}
@@ -198,7 +203,7 @@ func (s *Server) manualSnapshot(w http.ResponseWriter, r *http.Request) {
 	err := s.db.QueryRowContext(r.Context(), `
 		SELECT a.user_id FROM quota_buckets b
 		JOIN provider_accounts a ON a.id = b.provider_account_id
-		WHERE b.id = ?`, bucketID).Scan(&owner)
+		WHERE b.id = $1`, bucketID).Scan(&owner)
 	if err == sql.ErrNoRows || owner != uid {
 		httpx.Error(w, http.StatusNotFound, "not_found", "额度不存在")
 		return
@@ -223,25 +228,25 @@ func (s *Server) manualSnapshot(w http.ResponseWriter, r *http.Request) {
 	defer func() { _ = tx.Rollback() }()
 	if req.LimitValue != nil || resetAt != nil || expiresAt != nil {
 		_, err = tx.ExecContext(ctx, `UPDATE quota_buckets SET
-			limit_value = COALESCE(?, limit_value),
-			reset_at = COALESCE(?, reset_at),
-			expires_at = COALESCE(?, expires_at),
+			limit_value = COALESCE($1, limit_value),
+			reset_at = COALESCE($2, reset_at),
+			expires_at = COALESCE($3, expires_at),
 			source_type = 'user_manual',
-			updated_at = ?
-			WHERE id = ?`, argF64(req.LimitValue), argTime(resetAt), argTime(expiresAt), now.Format(time.RFC3339), bucketID)
+			updated_at = $4
+			WHERE id = $5`, argF64(req.LimitValue), argTime(resetAt), argTime(expiresAt), now.Format(time.RFC3339), bucketID)
 		if err != nil {
 			httpx.Error(w, http.StatusInternalServerError, "internal", "更新额度失败")
 			return
 		}
 	}
 	var limit sql.NullFloat64
-	_ = tx.QueryRowContext(ctx, `SELECT limit_value FROM quota_buckets WHERE id = ?`, bucketID).Scan(&limit)
+	_ = tx.QueryRowContext(ctx, `SELECT limit_value FROM quota_buckets WHERE id = $1`, bucketID).Scan(&limit)
 	ratio := req.RemainingRatio
 	if ratio == nil {
 		ratio = quota.RemainingRatio(nullF64(limit), req.RemainingValue, nil)
 	}
 	_, err = tx.ExecContext(ctx, `INSERT INTO usage_snapshots (id, quota_bucket_id, observed_at, used_value, remaining_value, remaining_ratio, note, raw_value_json, source_type, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, '{}', 'user_manual', ?)`,
+		VALUES ($1, $2, $3, $4, $5, $6, $7, '{}', 'user_manual', $8)`,
 		httpx.NewID("snap"), bucketID, obs.Format(time.RFC3339), argF64(req.UsedValue), argF64(req.RemainingValue), argF64(ratio), req.Note, now.Format(time.RFC3339))
 	if err != nil {
 		logErr("insert snapshot", err, httpx.RequestID(r))
@@ -270,14 +275,14 @@ func (s *Server) listSnapshots(w http.ResponseWriter, r *http.Request) {
 	err := s.db.QueryRowContext(r.Context(), `
 		SELECT a.user_id FROM quota_buckets b
 		JOIN provider_accounts a ON a.id = b.provider_account_id
-		WHERE b.id = ?`, bucketID).Scan(&owner)
+		WHERE b.id = $1`, bucketID).Scan(&owner)
 	if err == sql.ErrNoRows || owner != userID(r) {
 		httpx.Error(w, http.StatusNotFound, "not_found", "额度不存在")
 		return
 	}
 	since := s.clock.Now().UTC().Add(-time.Duration(days) * 24 * time.Hour).Format(time.RFC3339)
 	rows, err := s.db.QueryContext(r.Context(), `SELECT id, observed_at, used_value, remaining_value, remaining_ratio, note, source_type
-		FROM usage_snapshots WHERE quota_bucket_id = ? AND observed_at >= ? ORDER BY observed_at ASC`, bucketID, since)
+		FROM usage_snapshots WHERE quota_bucket_id = $1 AND observed_at >= $2 ORDER BY observed_at ASC`, bucketID, since)
 	if err != nil {
 		httpx.Error(w, http.StatusInternalServerError, "internal", "读取历史失败")
 		return

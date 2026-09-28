@@ -76,6 +76,12 @@ export default function AccountDetail() {
         </div>
       </div>
       {error ? <p className="error">{error}</p> : null}
+      {b?.collection_status === "stale" && (
+        <div className="sync-banner">采集暂时失败，显示的是上次成功快照；不会据此推断额度耗尽。</div>
+      )}
+      {(b?.collection_status === "unavailable" || b?.collection_status === "unknown") && (
+        <div className="sync-banner">当前 Cursor 额度不可用，请检查电脑登录与 bridge 采集。</div>
+      )}
 
       <div className="panel">
         <h2>当前快照</h2>

@@ -1,54 +1,23 @@
 import { FormEvent, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { ApiError, api, setToken } from "../api";
-
-export default function Login() {
-  const nav = useNavigate();
-  const [mode, setMode] = useState<"login" | "register">("login");
-  const [email, setEmail] = useState("demo@aihub.local");
-  const [password, setPassword] = useState("demo1234");
-  const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
-
-  async function onSubmit(e: FormEvent) {
-    e.preventDefault();
-    setBusy(true);
-    setError("");
-    try {
-      const res = mode === "login"
-        ? await api.login(email, password)
-        : await api.register(email, password);
-      setToken(res.token);
-      nav("/");
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : "无法连接服务");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <div className="auth-shell">
-      <form className="auth-card" onSubmit={onSubmit}>
-        <p className="eyebrow">Self-hosted AI asset hub</p>
-        <h1>先看清额度，再决定要不要续。</h1>
-        <p className="lead">把各平台套餐、剩余额度、重置和过期时间放在同一块看板上，并用规则生成可信提醒。</p>
-        {error ? <p className="error">{error}</p> : null}
-        <label className="field">
-          <span>邮箱</span>
-          <input value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="email" />
-        </label>
-        <label className="field">
-          <span>密码</span>
-          <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" />
-        </label>
-        <div className="actions">
-          <button className="btn" disabled={busy}>{mode === "login" ? "进入看板" : "创建账户"}</button>
-          <button type="button" className="btn secondary" onClick={() => setMode(mode === "login" ? "register" : "login")}>
-            {mode === "login" ? "没有账户？注册" : "已有账户？登录"}
-          </button>
-        </div>
-      </form>
-    </div>
-  );
+import { api, ApiError } from "../api";
+import { getSession, profile, profiles, saveProfile, selectProfile, saveSession, removeProfile } from "../session";
+export default function Login(){
+ const nav=useNavigate();const[mode,setMode]=useState<"login"|"register">("login");
+ const[email,setEmail]=useState("");const[password,setPassword]=useState("");const[device,setDevice]=useState("浏览器设备");
+ const[error,setError]=useState("");const[busy,setBusy]=useState(false);const[showProfile,setShowProfile]=useState(false);
+ const[editID,setEditID]=useState<string|undefined>();
+ const[url,setURL]=useState("https://");const[name,setName]=useState("");
+ async function submit(e:FormEvent){e.preventDefault();setBusy(true);setError("");try{
+ const s=await api[mode](email,password,device);saveSession(s);nav("/");
+ }catch(e){setError(e instanceof ApiError?e.message:"无法连接服务器，请检查地址与网络");}finally{setBusy(false);}}
+ return <div className="auth-shell"><div className="auth-intro"><p className="eyebrow">AI HUB / YOUR PERSONAL CONTROL ROOM</p><div className="auth-orbit">↗</div><h1>你的 AI 工作，<br/>在每一端接续。</h1><p className="lead">服务资产一处掌握。电脑与手机跨网络同步，<br/>数据留在你选择的服务器。</p><div className="auth-features"><span>01 / 自部署</span><span>02 / 离线优先</span><span>03 / 跨设备</span></div></div>
+ <div className="auth-card"><p className="eyebrow">WELCOME TO YOUR HUB</p><h2>{mode==="login"?"连接你的工作空间":"建立你的工作空间"}</h2><p className="muted">两端使用同一服务器与账户即可同步。</p>
+ <label className="field"><span>服务器</span><select value={profile().id} onChange={e=>selectProfile(e.target.value)}>{profiles().map(p=><option key={p.id} value={p.id}>{p.name} · {p.url}</option>)}</select></label>
+ <div className="actions"><button className="btn ghost" onClick={()=>{setEditID(undefined);setName("");setURL("https://");setShowProfile(!showProfile);}}>＋ 添加服务器</button><button className="btn ghost" onClick={()=>{setEditID(profile().id);setName(profile().name);setURL(profile().url);setShowProfile(true);}}>编辑服务器</button>{profiles().length>1&&<button className="btn ghost" onClick={()=>{try{removeProfile(profile().id);location.reload();}catch(e){setError(String(e));}}}>移除此服务器配置</button>}</div>
+ {showProfile&&<form className="profile-form" onSubmit={e=>{e.preventDefault();try{const p=saveProfile(name,url,editID);selectProfile(p.id);}catch(e){setError(String(e));}}}><label className="field"><span>名称</span><input required value={name} onChange={e=>setName(e.target.value)}/></label><label className="field"><span>HTTPS 地址</span><input required value={url} onChange={e=>setURL(e.target.value)}/></label><button className="btn secondary">保存服务器</button></form>}
+ {error&&<p className="error" role="alert">{error}</p>}
+ <form onSubmit={submit}><label className="field"><span>邮箱</span><input type="email" required autoComplete="email" value={email} onChange={e=>setEmail(e.target.value)}/></label><label className="field"><span>密码</span><input type="password" required minLength={8} autoComplete={mode==="login"?"current-password":"new-password"} value={password} onChange={e=>setPassword(e.target.value)}/></label><label className="field"><span>此设备的名称</span><input required maxLength={40} value={device} onChange={e=>setDevice(e.target.value)}/></label><div className="actions"><button className="btn" disabled={busy}>{busy?"正在连接…":mode==="login"?"进入工作空间 ↗":"创建账户 ↗"}</button><button type="button" className="btn ghost" onClick={()=>setMode(mode==="login"?"register":"login")}>{mode==="login"?"注册账户":"已有账户"}</button></div></form>
+ {getSession()&&<button className="btn ghost" onClick={()=>nav("/")}>离线打开本地工作空间</button>}
+ </div></div>;
 }

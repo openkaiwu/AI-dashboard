@@ -1,45 +1,76 @@
 package db
 
 import (
+	"aihub.dev/server/migrations"
 	"context"
 	"database/sql"
 	"fmt"
-	"os"
-	"path/filepath"
-
-	_ "modernc.org/sqlite"
+	_ "github.com/jackc/pgx/v5/stdlib"
+	"time"
 )
 
-func Open(path string) (*sql.DB, error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil && filepath.Dir(path) != "." && filepath.Dir(path) != "" {
-		return nil, err
-	}
-	dsn := path + "?_pragma=foreign_keys(1)&_pragma=busy_timeout(8000)&_pragma=journal_mode(WAL)"
-	database, err := sql.Open("sqlite", dsn)
+func Open(dsn string) (*sql.DB, error) {
+	database, err := sql.Open("pgx", dsn)
 	if err != nil {
 		return nil, err
 	}
-	database.SetMaxOpenConns(4)
+	database.SetMaxOpenConns(16)
 	database.SetMaxIdleConns(4)
-	if err := database.Ping(); err != nil {
-		_ = database.Close()
-		return nil, err
-	}
-	if _, err := database.Exec(`PRAGMA foreign_keys = ON`); err != nil {
-		_ = database.Close()
-		return nil, err
+	database.SetConnMaxLifetime(30 * time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err = database.PingContext(ctx); err != nil {
+		database.Close()
+		return nil, fmt.Errorf("database unavailable")
 	}
 	return database, nil
 }
-
-func Migrate(ctx context.Context, database *sql.DB, sqlText string) error {
+func Tx(ctx context.Context, database *sql.DB, fn func(*sql.Tx) error) error {
 	tx, err := database.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = tx.Rollback() }()
-	if _, err := tx.ExecContext(ctx, sqlText); err != nil {
-		return fmt.Errorf("migrate: %w", err)
+	defer tx.Rollback()
+	if err = fn(tx); err != nil {
+		return err
 	}
 	return tx.Commit()
+}
+func Migrate(ctx context.Context, database *sql.DB) error {
+	return Tx(ctx, database, func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(4182701)`); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations(version TEXT PRIMARY KEY,applied_at TIMESTAMPTZ NOT NULL DEFAULT now())`); err != nil {
+			return err
+		}
+		entries, err := migrations.FS.ReadDir(".")
+		if err != nil {
+			return err
+		}
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+			name := entry.Name()
+			var exists bool
+			if err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version=$1)`, name).Scan(&exists); err != nil {
+				return err
+			}
+			if exists {
+				continue
+			}
+			raw, err := migrations.FS.ReadFile(name)
+			if err != nil {
+				return err
+			}
+			if _, err = tx.ExecContext(ctx, string(raw)); err != nil {
+				return fmt.Errorf("migration %s: %w", name, err)
+			}
+			if _, err = tx.ExecContext(ctx, `INSERT INTO schema_migrations(version) VALUES($1)`, name); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }

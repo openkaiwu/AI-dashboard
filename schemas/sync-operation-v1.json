@@ -1,0 +1,14 @@
+{
+ "$schema":"https://json-schema.org/draft/2020-12/schema",
+ "$id":"urn:aihub:sync-operation:1",
+ "title":"AI Hub immutable note operation v1",
+ "type":"object","additionalProperties":false,
+ "required":["protocol","operation_id","entity","entity_id","base_version","op","payload"],
+ "properties":{
+  "protocol":{"const":1},"operation_id":{"type":"string","minLength":1,"maxLength":100},
+  "entity":{"const":"note"},"entity_id":{"type":"string","minLength":1,"maxLength":100},
+  "base_version":{"type":"integer","minimum":0},"op":{"enum":["put","delete"]},
+  "payload":{"type":"object","additionalProperties":false,"required":["title","body"],"properties":{"title":{"type":"string","maxLength":200},"body":{"type":"string","maxLength":12000}}}
+ },
+ "$comment":"Server additionally validates UTF-8 byte limits and nonblank title for put."
+}

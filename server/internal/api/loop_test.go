@@ -1,33 +1,20 @@
 package api_test
 
 import (
+	"aihub.dev/server/internal/testdb"
 	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"testing"
 	"time"
 
 	"aihub.dev/server/internal/api"
 	"aihub.dev/server/internal/clock"
-	"aihub.dev/server/internal/db"
-	"aihub.dev/server/migrations"
 )
 
 func TestQuotaLoop(t *testing.T) {
-	database, err := db.Open(filepath.Join(t.TempDir(), "t.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = database.Close() })
-	sqlText, err := migrations.FS.ReadFile("001_init.sql")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.Migrate(t.Context(), database, string(sqlText)); err != nil {
-		t.Fatal(err)
-	}
+	database := testdb.Open(t)
 	if err := api.SeedProviders(t.Context(), database); err != nil {
 		t.Fatal(err)
 	}

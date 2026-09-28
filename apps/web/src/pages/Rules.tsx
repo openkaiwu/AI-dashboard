@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { Preview, Rule, api } from "../api";
+import { Account, Preview, Rule, api } from "../api";
+import { getActiveProvider } from "../providerMode";
 
 const TYPE_LABEL: Record<string, string> = {
   "quota.low": "低额度",
@@ -10,18 +11,30 @@ const TYPE_LABEL: Record<string, string> = {
 };
 
 export default function Rules() {
+  const mode = getActiveProvider();
   const [rules, setRules] = useState<Rule[]>([]);
+  const [accounts, setAccounts] = useState<Account[]>([]);
   const [previews, setPreviews] = useState<Record<string, Preview>>({});
   const [error, setError] = useState("");
 
+  const modeAccounts = accounts.filter((a) =>
+    mode === "cursor" ? a.provider.slug === "cursor" : a.provider.slug !== "cursor",
+  );
+
   async function load() {
-    const r = await api.rules();
+    const [r, dash] = await Promise.all([api.rules(), api.dashboard()]);
     setRules(r.rules);
+    setAccounts(dash.accounts);
   }
 
   useEffect(() => {
     load().catch((e) => setError(e.message));
-  }, []);
+  }, [mode]);
+
+  function accountLabel(id: string) {
+    const acct = accounts.find((a) => a.id === id);
+    return acct ? `${acct.provider.display_name} / ${acct.display_name}` : id;
+  }
 
   return (
     <>
@@ -29,7 +42,7 @@ export default function Rules() {
         <div>
           <p className="eyebrow">Rule engine</p>
           <h1>提醒规则</h1>
-          <p>额度变化会立即求值。时间型规则即使没有新快照也会在后台扫描。</p>
+          <p>额度变化会立即求值。时间型规则即使没有新快照也会在后台扫描。规则可绑定到特定账户。</p>
         </div>
       </div>
       {error ? <p className="error">{error}</p> : null}
@@ -51,6 +64,26 @@ export default function Rules() {
               /> 启用
             </label>
           </div>
+          <label className="field" style={{ marginBottom: 12 }}>
+            <span>绑定账户（留空 = 当前模式下全部账户）</span>
+            <select
+              value={rule.provider_account_id || ""}
+              onChange={async (e) => {
+                await api.patchRule(rule.id, { provider_account_id: e.target.value });
+                await load();
+              }}
+            >
+              <option value="">全部 {mode === "cursor" ? "Cursor" : "Codex"} 账户</option>
+              {modeAccounts.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.provider.display_name} / {a.display_name}
+                </option>
+              ))}
+            </select>
+          </label>
+          {rule.provider_account_id ? (
+            <p className="meta">当前绑定：{accountLabel(rule.provider_account_id)}</p>
+          ) : null}
           <button className="btn secondary" onClick={async () => {
             const p = await api.previewRule(rule.id);
             setPreviews((m) => ({ ...m, [rule.id]: p }));
@@ -61,7 +94,9 @@ export default function Rules() {
                 {previews[rule.id].would_fire ? "将触发" : "不会触发"}
               </p>
               <ul>
-                {previews[rule.id].matches.map((m, i) => (
+                {previews[rule.id].matches
+                  .filter((m) => mode === "cursor" ? m.provider === "Cursor" : m.provider !== "Cursor")
+                  .map((m, i) => (
                   <li key={i}>
                     <b>{m.provider} / {m.account}</b> · {m.would_fire ? "将触发" : "不会触发"} · {m.reason}
                     {m.estimated_trigger_at ? ` · 预计 ${new Date(m.estimated_trigger_at).toLocaleString("zh-CN")}` : ""}

@@ -7,13 +7,41 @@ import (
 	"net/http"
 	"strings"
 
+	"aihub.dev/server/internal/connector"
 	"aihub.dev/server/internal/httpx"
 	"aihub.dev/server/internal/notification"
+	"aihub.dev/server/internal/quota"
 )
+
+func snapshotCollectionStatus(note, raw string) string {
+	note = strings.TrimSpace(note)
+	if note == "stale" || strings.Contains(strings.ToLower(note), "unavailable") {
+		return "stale"
+	}
+	if raw == "" {
+		return ""
+	}
+	var body struct {
+		Status string `json:"status"`
+	}
+	if json.Unmarshal([]byte(raw), &body) == nil {
+		return strings.TrimSpace(body.Status)
+	}
+	return ""
+}
+
+func collectionBlocksQuotaAlert(status string) bool {
+	switch status {
+	case "stale", "unavailable", "unknown":
+		return true
+	default:
+		return false
+	}
+}
 
 func (s *Server) listRules(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.db.QueryContext(r.Context(), `SELECT id, name, rule_type, enabled, params_json, provider_account_id, created_at, updated_at
-		FROM notification_rules WHERE user_id = ? ORDER BY created_at`, userID(r))
+		FROM notification_rules WHERE user_id = $1 ORDER BY created_at`, userID(r))
 	if err != nil {
 		httpx.Error(w, http.StatusInternalServerError, "internal", "读取规则失败")
 		return
@@ -80,7 +108,7 @@ func (s *Server) createRule(w http.ResponseWriter, r *http.Request) {
 	id := httpx.NewID("rule")
 	now := s.nowRFC()
 	_, err := s.db.ExecContext(r.Context(), `INSERT INTO notification_rules (id, user_id, name, rule_type, enabled, params_json, provider_account_id, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, id, userID(r), req.Name, req.RuleType, enabled, string(raw), acct, now, now)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`, id, userID(r), req.Name, req.RuleType, enabled, string(raw), acct, now, now)
 	if err != nil {
 		httpx.Error(w, http.StatusInternalServerError, "internal", "创建规则失败")
 		return
@@ -91,9 +119,10 @@ func (s *Server) createRule(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) patchRule(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Name    *string              `json:"name"`
-		Enabled *bool                `json:"enabled"`
-		Params  *notification.Params `json:"params"`
+		Name              *string              `json:"name"`
+		Enabled           *bool                `json:"enabled"`
+		Params            *notification.Params `json:"params"`
+		ProviderAccountID *string              `json:"provider_account_id"`
 	}
 	if err := httpx.Decode(r, &req); err != nil {
 		httpx.Error(w, http.StatusBadRequest, "invalid_json", "请求格式不正确")
@@ -102,8 +131,9 @@ func (s *Server) patchRule(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	var curName, curType, curParams string
 	var enabled int
-	err := s.db.QueryRowContext(r.Context(), `SELECT name, rule_type, enabled, params_json FROM notification_rules WHERE id = ? AND user_id = ?`, id, userID(r)).
-		Scan(&curName, &curType, &enabled, &curParams)
+	var curAcct sql.NullString
+	err := s.db.QueryRowContext(r.Context(), `SELECT name, rule_type, enabled, params_json, provider_account_id FROM notification_rules WHERE id = $1 AND user_id = $2`, id, userID(r)).
+		Scan(&curName, &curType, &enabled, &curParams, &curAcct)
 	if err == sql.ErrNoRows {
 		httpx.Error(w, http.StatusNotFound, "not_found", "规则不存在")
 		return
@@ -125,8 +155,19 @@ func (s *Server) patchRule(w http.ResponseWriter, r *http.Request) {
 		raw, _ := json.Marshal(req.Params)
 		curParams = string(raw)
 	}
-	_, err = s.db.ExecContext(r.Context(), `UPDATE notification_rules SET name = ?, enabled = ?, params_json = ?, updated_at = ? WHERE id = ?`,
-		curName, enabled, curParams, s.nowRFC(), id)
+	if req.ProviderAccountID != nil {
+		if *req.ProviderAccountID == "" {
+			curAcct = sql.NullString{}
+		} else {
+			curAcct = sql.NullString{String: *req.ProviderAccountID, Valid: true}
+		}
+	}
+	var acct any
+	if curAcct.Valid {
+		acct = curAcct.String
+	}
+	_, err = s.db.ExecContext(r.Context(), `UPDATE notification_rules SET name = $1, enabled = $2, params_json = $3, provider_account_id = $4, updated_at = $5 WHERE id = $6`,
+		curName, enabled, curParams, acct, s.nowRFC(), id)
 	if err != nil {
 		httpx.Error(w, http.StatusInternalServerError, "internal", "更新规则失败")
 		return
@@ -136,7 +177,7 @@ func (s *Server) patchRule(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) deleteRule(w http.ResponseWriter, r *http.Request) {
-	res, err := s.db.ExecContext(r.Context(), `DELETE FROM notification_rules WHERE id = ? AND user_id = ?`, r.PathValue("id"), userID(r))
+	res, err := s.db.ExecContext(r.Context(), `DELETE FROM notification_rules WHERE id = $1 AND user_id = $2`, r.PathValue("id"), userID(r))
 	if err != nil {
 		httpx.Error(w, http.StatusInternalServerError, "internal", "删除失败")
 		return
@@ -205,15 +246,19 @@ func (s *Server) writePreview(w http.ResponseWriter, r *http.Request, rule notif
 		})
 	}
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{
-		"would_fire": would,
-		"matches":    matches,
+		"would_fire":   would,
+		"matches":      matches,
 		"evaluated_at": now.UTC().Format("2006-01-02T15:04:05Z07:00"),
 	})
 }
 
 func (s *Server) listNotifications(w http.ResponseWriter, r *http.Request) {
-	rows, err := s.db.QueryContext(r.Context(), `SELECT id, rule_id, provider_account_id, quota_bucket_id, title, body, severity, dedupe_key, status, created_at
-		FROM notifications WHERE user_id = ? ORDER BY created_at DESC LIMIT 100`, userID(r))
+	rows, err := s.db.QueryContext(r.Context(), `SELECT n.id, n.rule_id, n.provider_account_id, n.quota_bucket_id, n.title, n.body, n.severity, n.dedupe_key, n.status, n.created_at,
+		COALESCE(p.slug, ''), COALESCE(p.display_name, '')
+		FROM notifications n
+		LEFT JOIN provider_accounts a ON a.id = n.provider_account_id
+		LEFT JOIN providers p ON p.id = a.provider_id
+		WHERE n.user_id = $1 ORDER BY n.created_at DESC LIMIT 100`, userID(r))
 	if err != nil {
 		httpx.Error(w, http.StatusInternalServerError, "internal", "读取通知失败")
 		return
@@ -221,9 +266,9 @@ func (s *Server) listNotifications(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 	out := make([]map[string]any, 0)
 	for rows.Next() {
-		var id, title, body, sev, key, status, created string
+		var id, title, body, sev, key, status, created, providerSlug, providerName string
 		var ruleID, acct, bucket sql.NullString
-		if err := rows.Scan(&id, &ruleID, &acct, &bucket, &title, &body, &sev, &key, &status, &created); err != nil {
+		if err := rows.Scan(&id, &ruleID, &acct, &bucket, &title, &body, &sev, &key, &status, &created, &providerSlug, &providerName); err != nil {
 			httpx.Error(w, http.StatusInternalServerError, "internal", "读取通知失败")
 			return
 		}
@@ -232,6 +277,8 @@ func (s *Server) listNotifications(w http.ResponseWriter, r *http.Request) {
 			"rule_id":             nullStr(ruleID),
 			"provider_account_id": nullStr(acct),
 			"quota_bucket_id":     nullStr(bucket),
+			"provider_slug":       providerSlug,
+			"provider_name":       providerName,
 			"title":               title,
 			"body":                body,
 			"severity":            sev,
@@ -244,7 +291,7 @@ func (s *Server) listNotifications(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) readNotification(w http.ResponseWriter, r *http.Request) {
-	_, err := s.db.ExecContext(r.Context(), `UPDATE notifications SET status = 'read' WHERE id = ? AND user_id = ?`, r.PathValue("id"), userID(r))
+	_, err := s.db.ExecContext(r.Context(), `UPDATE notifications SET status = 'read' WHERE id = $1 AND user_id = $2`, r.PathValue("id"), userID(r))
 	if err != nil {
 		httpx.Error(w, http.StatusInternalServerError, "internal", "更新失败")
 		return
@@ -253,7 +300,7 @@ func (s *Server) readNotification(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) readAllNotifications(w http.ResponseWriter, r *http.Request) {
-	_, err := s.db.ExecContext(r.Context(), `UPDATE notifications SET status = 'read' WHERE user_id = ?`, userID(r))
+	_, err := s.db.ExecContext(r.Context(), `UPDATE notifications SET status = 'read' WHERE user_id = $1`, userID(r))
 	if err != nil {
 		httpx.Error(w, http.StatusInternalServerError, "internal", "更新失败")
 		return
@@ -265,7 +312,7 @@ func (s *Server) loadRule(ctx context.Context, uid, id string) (notification.Rul
 	var name, typ, params string
 	var enabled int
 	var acct sql.NullString
-	err := s.db.QueryRowContext(ctx, `SELECT name, rule_type, enabled, params_json, provider_account_id FROM notification_rules WHERE id = ? AND user_id = ?`, id, uid).
+	err := s.db.QueryRowContext(ctx, `SELECT name, rule_type, enabled, params_json, provider_account_id FROM notification_rules WHERE id = $1 AND user_id = $2`, id, uid).
 		Scan(&name, &typ, &enabled, &params, &acct)
 	if err != nil {
 		return notification.Rule{}, err
@@ -281,7 +328,16 @@ func (s *Server) loadRule(ctx context.Context, uid, id string) (notification.Rul
 
 func skipSubject(rule notification.Rule, sub notification.Subject) bool {
 	switch rule.Type {
-	case notification.TypeLowQuota, notification.TypeResetSoonUnused, notification.TypeExpireSoonUnused, notification.TypeStale:
+	case notification.TypeLowQuota, notification.TypeResetSoonUnused, notification.TypeExpireSoonUnused:
+		if sub.BucketID == "" {
+			return true
+		}
+		if collectionBlocksQuotaAlert(sub.CollectionStatus) {
+			return true
+		}
+		ratio := quota.RemainingRatio(sub.LimitValue, sub.RemainingValue, sub.RemainingRatio)
+		return ratio == nil && sub.RemainingValue == nil
+	case notification.TypeStale:
 		return sub.BucketID == ""
 	case notification.TypeRenewalSoon:
 		return sub.EntitlementID == ""
@@ -296,7 +352,8 @@ func (s *Server) listSubjects(ctx context.Context, uid string) ([]notification.S
 		       COALESCE(b.id, ''), COALESCE(b.scope_key, ''),
 		       COALESCE(e.id, ''), COALESCE(e.plan_name, ''),
 		       b.limit_value, s.remaining_value, s.remaining_ratio,
-		       b.reset_at, b.expires_at, e.renews_at, s.observed_at
+		       b.reset_at, b.expires_at, e.renews_at, s.observed_at,
+		       COALESCE(s.note, ''), COALESCE(s.raw_value_json, '{}')
 		FROM provider_accounts a
 		JOIN providers p ON p.id = a.provider_id
 		LEFT JOIN entitlements e ON e.id = (
@@ -306,7 +363,7 @@ func (s *Server) listSubjects(ctx context.Context, uid string) ([]notification.S
 		LEFT JOIN usage_snapshots s ON s.id = (
 			SELECT id FROM usage_snapshots WHERE quota_bucket_id = b.id ORDER BY observed_at DESC LIMIT 1
 		)
-		WHERE a.user_id = ?`, uid)
+		WHERE a.user_id = $1`, uid)
 	if err != nil {
 		return nil, err
 	}
@@ -315,9 +372,9 @@ func (s *Server) listSubjects(ctx context.Context, uid string) ([]notification.S
 	for rows.Next() {
 		var sub notification.Subject
 		var limit, remain, ratio sql.NullFloat64
-		var reset, exp, renew, obs sql.NullString
+		var reset, exp, renew, obs, note, raw sql.NullString
 		if err := rows.Scan(&sub.AccountID, &sub.AccountName, &sub.ProviderName, &sub.BucketID, &sub.ScopeKey,
-			&sub.EntitlementID, &sub.PlanName, &limit, &remain, &ratio, &reset, &exp, &renew, &obs); err != nil {
+			&sub.EntitlementID, &sub.PlanName, &limit, &remain, &ratio, &reset, &exp, &renew, &obs, &note, &raw); err != nil {
 			return nil, err
 		}
 		sub.LimitValue = nullF64(limit)
@@ -327,13 +384,14 @@ func (s *Server) listSubjects(ctx context.Context, uid string) ([]notification.S
 		sub.ExpiresAt = nullTime(exp)
 		sub.RenewsAt = nullTime(renew)
 		sub.ObservedAt = nullTime(obs)
+		sub.CollectionStatus = snapshotCollectionStatus(nullStr(note), nullStr(raw))
 		out = append(out, sub)
 	}
 	return out, rows.Err()
 }
 
 func (s *Server) evaluateUser(ctx context.Context, uid string) error {
-	rulesRows, err := s.db.QueryContext(ctx, `SELECT id, name, rule_type, enabled, params_json, provider_account_id FROM notification_rules WHERE user_id = ?`, uid)
+	rulesRows, err := s.db.QueryContext(ctx, `SELECT id, name, rule_type, enabled, params_json, provider_account_id FROM notification_rules WHERE user_id = $1`, uid)
 	if err != nil {
 		return err
 	}
@@ -363,7 +421,7 @@ func (s *Server) evaluateUser(ctx context.Context, uid string) error {
 		return err
 	}
 	active := map[string]struct{}{}
-	aRows, err := s.db.QueryContext(ctx, `SELECT dedupe_key FROM alert_states WHERE user_id = ?`, uid)
+	aRows, err := s.db.QueryContext(ctx, `SELECT dedupe_key FROM alert_states WHERE user_id = $1`, uid)
 	if err != nil {
 		return err
 	}
@@ -409,11 +467,11 @@ func (s *Server) evaluateUser(ctx context.Context, uid string) error {
 				acct = res.AccountID
 			}
 			_, err = s.db.ExecContext(ctx, `INSERT INTO notifications (id, user_id, rule_id, provider_account_id, quota_bucket_id, title, body, severity, dedupe_key, status, created_at)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'unread', ?)`, nid, uid, rule.ID, acct, bucket, res.Title, res.Body, res.Severity, res.DedupeKey, ts)
+				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'unread', $10)`, nid, uid, rule.ID, acct, bucket, res.Title, res.Body, res.Severity, res.DedupeKey, ts)
 			if err != nil {
 				return err
 			}
-			_, err = s.db.ExecContext(ctx, `INSERT INTO alert_states (user_id, dedupe_key, notification_id, created_at) VALUES (?, ?, ?, ?)`, uid, res.DedupeKey, nid, ts)
+			_, err = s.db.ExecContext(ctx, `INSERT INTO alert_states (user_id, dedupe_key, notification_id, created_at) VALUES ($1, $2, $3, $4)`, uid, res.DedupeKey, nid, ts)
 			if err != nil {
 				return err
 			}
@@ -424,14 +482,14 @@ func (s *Server) evaluateUser(ctx context.Context, uid string) error {
 		if _, ok := wanted[key]; ok {
 			continue
 		}
-		if _, err := s.db.ExecContext(ctx, `DELETE FROM alert_states WHERE user_id = ? AND dedupe_key = ?`, uid, key); err != nil {
+		if _, err := s.db.ExecContext(ctx, `DELETE FROM alert_states WHERE user_id = $1 AND dedupe_key = $2`, uid, key); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (s *Server) EvaluateAll(ctx context.Context) error {
+func (s *Server) forUsers(ctx context.Context, evaluate func(string) error) error {
 	rows, err := s.db.QueryContext(ctx, `SELECT id FROM users`)
 	if err != nil {
 		return err
@@ -446,9 +504,20 @@ func (s *Server) EvaluateAll(ctx context.Context) error {
 		ids = append(ids, id)
 	}
 	for _, id := range ids {
-		if err := s.evaluateUser(ctx, id); err != nil {
+		if err := evaluate(id); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func (s *Server) EvaluateCodexAll(ctx context.Context) error {
+	return s.forUsers(ctx, func(id string) error {
+		_, err := (&connector.Service{DB: s.db}).Evaluate(ctx, id, s.clock.Now())
+		return err
+	})
+}
+
+func (s *Server) EvaluateNotificationsAll(ctx context.Context) error {
+	return s.forUsers(ctx, func(id string) error { return s.evaluateUser(ctx, id) })
 }

@@ -11,3 +11,7 @@ createRoot(document.getElementById("root")!).render(
     </BrowserRouter>
   </StrictMode>,
 );
+
+import "./foundation.css";
+import { prepareOffline } from "./offline";
+void prepareOffline();

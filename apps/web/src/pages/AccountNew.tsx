@@ -1,6 +1,7 @@
 import { FormEvent, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { ApiError, Provider, api } from "../api";
+import { getActiveProvider } from "../providerMode";
 
 export default function AccountNew() {
   const nav = useNavigate();
@@ -24,9 +25,11 @@ export default function AccountNew() {
   });
 
   useEffect(() => {
+    const mode = getActiveProvider();
     api.providers().then((r) => {
       setProviders(r.providers);
-      if (r.providers[0]) setForm((f) => ({ ...f, provider_id: r.providers[0].id }));
+      const preferred = r.providers.find((p) => p.slug === mode) ?? r.providers[0];
+      if (preferred) setForm((f) => ({ ...f, provider_id: preferred.id }));
     }).catch((e) => setError(e.message));
   }, []);
 

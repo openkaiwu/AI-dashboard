@@ -7,32 +7,24 @@ import (
 )
 
 type Config struct {
-	Addr         string
-	DatabasePath string
-	Demo         bool
+	Addr        string
+	DatabaseURL string
+	Demo        bool
+	WebDist     string
 }
 
 func Load() Config {
-	cfg := Config{
-		Addr:         envOr("AIHUB_ADDR", ":8080"),
-		DatabasePath: envOr("AIHUB_DATABASE", "data/aihub.db"),
-		Demo:         envTrue("AIHUB_DEMO"),
-	}
-	flag.StringVar(&cfg.Addr, "addr", cfg.Addr, "HTTP listen address")
-	flag.StringVar(&cfg.DatabasePath, "database", cfg.DatabasePath, "SQLite database path")
-	flag.BoolVar(&cfg.Demo, "demo", cfg.Demo, "seed demo user and sample quota data")
+	c := Config{Addr: envOr("AIHUB_ADDR", "127.0.0.1:8080"), DatabaseURL: os.Getenv("AIHUB_DATABASE_URL"), Demo: os.Getenv("AIHUB_DEMO") == "true", WebDist: envOr("AIHUB_WEB_DIST", "../apps/web/dist")}
+	flag.StringVar(&c.Addr, "addr", c.Addr, "HTTP listen address; use HTTPS reverse proxy for Internet")
+	flag.StringVar(&c.DatabaseURL, "database", c.DatabaseURL, "PostgreSQL connection URL")
+	flag.StringVar(&c.WebDist, "web", c.WebDist, "built Web directory")
+	flag.BoolVar(&c.Demo, "demo", c.Demo, "seed local demo data (not production)")
 	flag.Parse()
-	return cfg
+	return c
 }
-
-func envOr(key, fallback string) string {
-	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
+func envOr(k, f string) string {
+	if v := strings.TrimSpace(os.Getenv(k)); v != "" {
 		return v
 	}
-	return fallback
-}
-
-func envTrue(key string) bool {
-	v := strings.ToLower(strings.TrimSpace(os.Getenv(key)))
-	return v == "1" || v == "true" || v == "yes"
+	return f
 }

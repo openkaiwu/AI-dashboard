@@ -1,99 +1,80 @@
 package main
 
 import (
+	"aihub.dev/server/internal/api"
+	"aihub.dev/server/internal/clock"
+	"aihub.dev/server/internal/config"
+	"aihub.dev/server/internal/db"
 	"context"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"syscall"
 	"time"
-
-	"aihub.dev/server/internal/api"
-	"aihub.dev/server/internal/clock"
-	"aihub.dev/server/internal/config"
-	"aihub.dev/server/internal/db"
-	"aihub.dev/server/migrations"
 )
 
 func main() {
-	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})))
-	cfg := config.Load()
-
-	database, err := db.Open(cfg.DatabasePath)
-	if err != nil {
-		slog.Error("open database", "error", err.Error())
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
+	c := config.Load()
+	if c.DatabaseURL == "" {
+		slog.Error("AIHUB_DATABASE_URL is required")
+		os.Exit(1)
+	}
+	database, e := db.Open(c.DatabaseURL)
+	if e != nil {
+		slog.Error("database connection failed")
 		os.Exit(1)
 	}
 	defer database.Close()
-
-	sqlText, err := migrations.FS.ReadFile("001_init.sql")
-	if err != nil {
-		slog.Error("read migrations", "error", err.Error())
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	if e = db.Migrate(ctx, database); e != nil {
+		slog.Error("migration failed", "error", e.Error())
 		os.Exit(1)
 	}
-	ctx := context.Background()
-	if err := db.Migrate(ctx, database, string(sqlText)); err != nil {
-		slog.Error("migrate", "error", err.Error())
+	if e = api.SeedProviders(ctx, database); e != nil {
+		slog.Error("provider seed failed")
 		os.Exit(1)
 	}
-	if err := api.SeedProviders(ctx, database); err != nil {
-		slog.Error("seed providers", "error", err.Error())
-		os.Exit(1)
-	}
-
-	dist := findWebDist()
-	srvAPI := api.New(database, clock.Real{}, dist)
-	if cfg.Demo {
-		if err := api.SeedDemo(ctx, database, srvAPI); err != nil {
-			slog.Error("seed demo", "error", err.Error())
+	app := api.New(database, clock.Real{}, c.WebDist)
+	if c.Demo {
+		if e = api.SeedDemo(ctx, database, app); e != nil {
+			slog.Error("demo seed failed")
 			os.Exit(1)
 		}
 	}
-
-	httpSrv := &http.Server{
-		Addr:              cfg.Addr,
-		Handler:           srvAPI.Handler(),
-		ReadHeaderTimeout: 10 * time.Second,
-	}
-
+	srv := &http.Server{Addr: c.Addr, Handler: app.Handler(), ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 20 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16384}
 	go func() {
-		ticker := time.NewTicker(60 * time.Second)
+		ticker := time.NewTicker(time.Minute)
 		defer ticker.Stop()
-		for range ticker.C {
-			if err := srvAPI.EvaluateAll(context.Background()); err != nil {
-				slog.Error("scheduled rule evaluation", "error", err.Error())
+		minute := 0
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				minute++
+				if minute%5 == 0 {
+					if e := app.EvaluateCodexAll(ctx); e != nil {
+						slog.Error("Codex rule evaluation failed")
+					}
+				}
+				if e := app.EvaluateNotificationsAll(ctx); e != nil {
+					slog.Error("rule evaluation failed")
+				}
 			}
 		}
 	}()
-
 	go func() {
-		slog.Info("aihub listening", "addr", cfg.Addr, "database", cfg.DatabasePath, "webdist", dist)
-		if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			slog.Error("listen", "error", err.Error())
-			os.Exit(1)
+		slog.Info("AI Hub ready", "address", c.Addr, "protocol", 1)
+		if e := srv.ListenAndServe(); e != nil && e != http.ErrServerClosed {
+			slog.Error("listen failed")
+			stop()
 		}
 	}()
-
-	stop := make(chan os.Signal, 1)
-	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
-	<-stop
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	<-ctx.Done()
+	shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	_ = httpSrv.Shutdown(shutdownCtx)
-}
-
-func findWebDist() string {
-	candidates := []string{
-		"webdist",
-		filepath.Join("server", "webdist"),
-		filepath.Join(filepath.Dir(os.Args[0]), "webdist"),
-	}
-	for _, c := range candidates {
-		if st, err := os.Stat(filepath.Join(c, "index.html")); err == nil && !st.IsDir() {
-			return c
-		}
-	}
-	return ""
+	_ = srv.Shutdown(shutdown)
 }

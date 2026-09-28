@@ -1,6 +1,8 @@
 package api
 
 import (
+	"aihub.dev/server/webassets"
+	"bytes"
 	"context"
 	"database/sql"
 	"io/fs"
@@ -11,8 +13,11 @@ import (
 	"strings"
 	"time"
 
+	"aihub.dev/server/internal/auth"
 	"aihub.dev/server/internal/clock"
+	"aihub.dev/server/internal/connector"
 	"aihub.dev/server/internal/httpx"
+	syncservice "aihub.dev/server/internal/sync"
 )
 
 type ctxKey string
@@ -34,10 +39,37 @@ func New(database *sql.DB, clk clock.Clock, distDir string) *Server {
 
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /health", s.health)
+	authService := &auth.Service{DB: s.db, OnRegister: func(ctx context.Context, tx *sql.Tx, uid, now string) error {
+		return insertDefaultRules(ctx, tx, uid, now)
+	}}
+	syncService := &syncservice.Service{DB: s.db}
+	bridgeService := &connector.Service{DB: s.db, AfterQuotaWrite: func(ctx context.Context, uid string) error {
+		return s.evaluateUser(ctx, uid)
+	}}
+	mux.Handle("GET /api/v1/codex/overview", authService.Middleware(bridgeService.Overview))
+	mux.Handle("PATCH /api/v1/codex/preferences", authService.Middleware(bridgeService.Preferences))
+	mux.Handle("POST /api/v1/codex/alerts/{id}", authService.Middleware(bridgeService.AlertAction))
+	mux.Handle("GET /api/v1/codex/bridges", authService.Middleware(bridgeService.List))
+	mux.Handle("POST /api/v1/codex/bridges", authService.Middleware(bridgeService.Create))
+	mux.Handle("DELETE /api/v1/codex/bridges/{id}", authService.Middleware(bridgeService.Revoke))
+	mux.HandleFunc("POST /api/v1/codex/snapshot", bridgeService.Upload)
+	mux.HandleFunc("POST /api/v1/cursor/snapshot", bridgeService.UploadCursor)
+	mux.HandleFunc("GET /ready", s.health)
+	mux.HandleFunc("GET /api/v1/meta", func(w http.ResponseWriter, r *http.Request) {
+		httpx.WriteJSON(w, 200, map[string]any{"protocol": 1, "schema": 1, "version": "0.2.0-m0"})
+	})
+	mux.HandleFunc("POST /api/v1/auth/refresh", authService.Refresh)
+	mux.Handle("POST /api/v1/auth/logout", authService.Middleware(authService.Logout))
+	mux.Handle("GET /api/v1/devices", authService.Middleware(authService.Devices))
+	mux.Handle("DELETE /api/v1/devices/{id}", authService.Middleware(authService.Revoke))
+	mux.Handle("POST /api/v1/sync/push", authService.Middleware(syncService.Push))
+	mux.Handle("GET /api/v1/sync/pull", authService.Middleware(syncService.Pull))
+	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
+		httpx.WriteJSON(w, 200, map[string]string{"status": "ok"})
+	})
 	mux.HandleFunc("GET /api/v1/health", s.health)
-	mux.HandleFunc("POST /api/v1/auth/register", s.register)
-	mux.HandleFunc("POST /api/v1/auth/login", s.login)
+	mux.HandleFunc("POST /api/v1/auth/register", authService.Register)
+	mux.HandleFunc("POST /api/v1/auth/login", authService.Login)
 
 	mux.Handle("GET /api/v1/me", s.authed(s.me))
 	mux.Handle("GET /api/v1/providers", s.authed(s.listProviders))
@@ -66,9 +98,14 @@ func (s *Server) Handler() http.Handler {
 	if s.dist != "" {
 		if _, err := os.Stat(s.dist); err == nil {
 			mux.Handle("/", spaHandler(s.dist))
+		} else {
+			mux.Handle("/", spaFS(webassets.FS()))
 		}
+	} else {
+		mux.Handle("/", spaFS(webassets.FS()))
 	}
-	return httpx.CORS(httpx.Middleware(mux))
+
+	return httpx.CORS(httpx.Middleware(httpx.Guard(mux)))
 }
 
 func (s *Server) health(w http.ResponseWriter, r *http.Request) {
@@ -87,30 +124,9 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) authed(next http.HandlerFunc) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		header := r.Header.Get("Authorization")
-		token := strings.TrimSpace(strings.TrimPrefix(header, "Bearer"))
-		token = strings.TrimSpace(token)
-		if token == "" {
-			httpx.Error(w, http.StatusUnauthorized, "unauthenticated", "需要登录")
-			return
-		}
-		var userID, expires string
-		err := s.db.QueryRowContext(r.Context(), `SELECT user_id, expires_at FROM sessions WHERE token = ?`, token).Scan(&userID, &expires)
-		if err == sql.ErrNoRows {
-			httpx.Error(w, http.StatusUnauthorized, "unauthenticated", "登录已失效")
-			return
-		}
-		if err != nil {
-			httpx.Error(w, http.StatusInternalServerError, "internal", "读取会话失败")
-			return
-		}
-		exp, err := time.Parse(time.RFC3339, expires)
-		if err != nil || exp.Before(s.clock.Now()) {
-			httpx.Error(w, http.StatusUnauthorized, "unauthenticated", "登录已过期")
-			return
-		}
-		ctx := context.WithValue(r.Context(), userIDKey, userID)
+	service := &auth.Service{DB: s.db}
+	return service.Middleware(func(w http.ResponseWriter, r *http.Request) {
+		ctx := context.WithValue(r.Context(), userIDKey, auth.Who(r).UserID)
 		next(w, r.WithContext(ctx))
 	})
 }
@@ -216,4 +232,31 @@ func argF64(v *float64) any {
 
 func logErr(msg string, err error, requestID string) {
 	slog.Error(msg, "error", err.Error(), "request_id", requestID)
+}
+
+func spaFS(root fs.FS) http.Handler {
+	files := http.FileServer(http.FS(root))
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/") || (r.Method != "GET" && r.Method != "HEAD") {
+			http.NotFound(w, r)
+			return
+		}
+		p := strings.TrimPrefix(r.URL.Path, "/")
+		if p == "" {
+			p = "index.html"
+		}
+		if p == "sw.js" || p == "index.html" {
+			w.Header().Set("Cache-Control", "no-cache")
+		}
+		if _, e := fs.Stat(root, p); e == nil {
+			files.ServeHTTP(w, r)
+			return
+		}
+		raw, e := fs.ReadFile(root, "index.html")
+		if e != nil {
+			http.NotFound(w, r)
+			return
+		}
+		http.ServeContent(w, r, "index.html", time.Time{}, bytes.NewReader(raw))
+	})
 }

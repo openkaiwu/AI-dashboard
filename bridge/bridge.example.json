@@ -1,0 +1,7 @@
+{
+  "server": "http://127.0.0.1:8080",
+  "token": "CREATE_A_CONNECTION_IN_AI_HUB",
+  "codex_path": "",
+  "cursor_enabled": true,
+  "interval_seconds": 300
+}

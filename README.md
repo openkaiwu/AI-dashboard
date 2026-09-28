@@ -1,34 +1,80 @@
-# AI Hub
+# AI Hub · M0 Foundation
 
-自部署的 AI 服务资产中枢。当前仓库实现的是 **Web 端额度追踪 MVP**：登录后手工登记各平台套餐与额度，看板按状态排列，规则引擎生成提醒，并可查看用量历史。
+公开仓库中的 `hub.example.com` 与 `203.0.113.10` 均为脱敏示例地址。实际服务器地址、账户和连接凭据只应在本机配置，不能写入源码或构建参数。
 
-配套设计见 `docs/AI_Aggregation_Platform_Technical_Architecture.md` 与 `docs/AI_Aggregation_Platform_Development_Roadmap.md`。
+电脑与手机共享的自部署 AI 工作空间。以 AI-dashboard 的 Go/React 额度看板为基础，
+参考 codex-quota-band 的设备同步与隐私边界，按 Linear M0 实现 PostgreSQL + Flutter/Drift + 增量同步。
+不包含小米手环功能。
 
-## 运行
+## Codex 智能提醒
 
-本机需要 Go 1.22+ 与 Node.js 20+。
+首页已特化为 Codex 额度节奏助手：多用/慢用建议、重置卡到期提醒、近 6 小时趋势、跨端规则、免打扰与 Tibo 消息。见 [规则与通知说明](docs/CODEX_ADVISOR_ZH.md)。
 
-```bash
-# 终端 1：API + SQLite（含演示数据）
-make run-demo
+## Codex 本地连接
 
-# 终端 2：Web
-make web-install
-make web-dev
-```
+已实现电脑 Codex 真实额度采集、专用可撤销连接、Web/PWA 与 Flutter 展示和缓存。详见 [Codex 连接说明](docs/CODEX_CONNECTION_ZH.md)。运行包含 Windows/Linux 采集器及 Windows 启停脚本。
 
-打开 http://127.0.0.1:5173
+## 现在可用
 
-演示账户：`demo@aihub.local` / `demo1234`
+- **跨端便笺**：离线保存、持久队列、版本冲突处理、删除同步、重试幂等。
+- **设备与账户**：独立设备授权/撤销、access/refresh 轮换、审计。
+- **服务器配置**：可切换自部署服务器，外网强制 HTTPS。
+- **现有额度功能**：手工登记、在线额度看板、提醒规则、通知、历史记录。
+- **客户端**：可运行 Web/PWA；Flutter Android/Windows/Linux 源码及 Drift 核心测试。
+- **部署**：Windows/Linux 服务端单二进制（已内嵌 Web），PostgreSQL；可选 Docker + Caddy。
 
-## 这个版本覆盖什么
+M0 增量事件流同步的是便笺；Codex 自动采集作为后续增量，使用独立快照接口。其他 Provider 自动采集、额度领域离线事件同步、手机后台通知及多人协作仍属后续阶段。
 
-- 注册 / 登录
-- 5 个预置 Provider（OpenAI、Anthropic、Gemini、Cursor、GitHub Copilot）
-- 手工登记账户、套餐、额度桶、重置/过期时间
-- 状态计算：正常 / 额度不足 / 即将重置 / 即将过期 / 数据过期 / 未知
-- 五类提醒规则 + 预览 + 去重
-- 通知收件箱
-- 7/30 天用量快照
+## 在这台电脑启动
 
-本地数据库文件：`data/aihub.db`。单进程即可跑通，生产环境的 PostgreSQL 与 Flutter 客户端按架构后续接入。
+~~~powershell
+powershell -ExecutionPolicy Bypass -File scripts/Start-Local.ps1
+~~~
+
+打开 **http://127.0.0.1:8080**。
+本地演示账户：**demo@aihub.local / demo1234**。演示额度不代表真实 Provider 数据。
+可注册自己的本地账户。
+
+~~~powershell
+# 停止本次本地服务；数据库和便笺保留
+powershell -ExecutionPolicy Bypass -File scripts/Stop-Local.ps1
+~~~
+
+本机启动脚本复用 WSL PostgreSQL，并保持 WSL 存活，避免系统空闲回收导致原生服务失去数据库连接。
+其他机器请使用 [部署说明](docs/DEPLOYMENT_ZH.md)，不要依赖本机 .runtime 配置。
+
+## 文档与产物
+
+- [当前开发进度（2026-09-23）](docs/DEVELOPMENT_PROGRESS_20260923_ZH.md)
+- [开发思路及 M0/M1/M2 边界](docs/DEVELOPMENT_PLAN_ZH.md)
+- [冻结协议、模块所有权、威胁模型](docs/CONTRACTS.md)
+- [运行、公网 HTTPS、自部署与备份](docs/DEPLOYMENT_ZH.md)
+- [验证记录与尚未验证的内容](docs/VALIDATION.md)
+- [上游版本与授权来源](docs/UPSTREAM.md)
+
+运行包：artifacts/aihub-m0-runtime.zip。完整源码/部署包：artifacts/aihub-m0-source.zip。
+运行包不含数据库、账号凭据或示例用户数据；请配置自己的 PostgreSQL。
+Android APK 和 Windows Flutter 原生客户端未在本机打包；可运行桌面产物为服务端 + Web/PWA。
+
+## 验证与构建
+
+本机一键完整 Gate：
+~~~powershell
+powershell -ExecutionPolicy Bypass -File scripts/Gate.ps1
+~~~
+
+Linux/CI：
+~~~bash
+npm ci --prefix apps/web
+npm test --prefix apps/web
+npm run build --prefix apps/web
+cp -R apps/web/dist/. server/webassets/dist/
+export AIHUB_TEST_DATABASE_URL='postgres://USER:PASSWORD@127.0.0.1:5432/TEST_DB?sslmode=disable'
+bash scripts/gate.sh
+~~~
+
+Gate 在独立 PostgreSQL schema 验证 Go/Auth/Sync/jobs，并启动临时服务，
+用两个独立 Drift 客户端做真实 HTTP 联测。没有数据库的普通 go test 会跳过集成测试，
+不能作为 M0 Gate 已通过的证据。
+
+构建完整运行包见 scripts/Build-Release.ps1（本机）或 scripts/build.sh（Linux）。

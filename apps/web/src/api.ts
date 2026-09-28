@@ -1,14 +1,6 @@
-const TOKEN_KEY = "aihub_token";
-
-export function getToken(): string | null {
-  return localStorage.getItem(TOKEN_KEY);
-}
-
-export function setToken(token: string | null) {
-  if (token) localStorage.setItem(TOKEN_KEY, token);
-  else localStorage.removeItem(TOKEN_KEY);
-}
-
+import { getSession, saveSession, profile, Session } from "./session";
+export function getToken(){return getSession()?.token||null;}
+export function setToken(token:string|null){if(!token)saveSession(null);}
 export class ApiError extends Error {
   status: number;
   code: string;
@@ -19,21 +11,26 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const headers = new Headers(init.headers);
-  headers.set("Accept", "application/json");
-  if (init.body && !headers.has("Content-Type")) {
-    headers.set("Content-Type", "application/json");
-  }
-  const token = getToken();
-  if (token) headers.set("Authorization", `Bearer ${token}`);
-  const res = await fetch(path, { ...init, headers });
-  const text = await res.text();
-  const data = text ? JSON.parse(text) : {};
-  if (!res.ok) {
-    throw new ApiError(res.status, data.error ?? "error", data.message ?? "请求失败");
-  }
-  return data as T;
+export async function request<T>(path:string,init:RequestInit={},retried=false):Promise<T>{
+ const p=profile();const session=getSession(p);
+ if(session?.blocked&&!path.startsWith("/api/v1/auth/"))throw new ApiError(401,"session_revoked","请重新登录；本地修改仍保留");
+ const headers=new Headers(init.headers);headers.set("Accept","application/json");
+ if(init.body)headers.set("Content-Type","application/json");
+ if(session)headers.set("Authorization","Bearer "+session.token);
+ const res=await fetch(p.url+path,{...init,headers,signal:init.signal||AbortSignal.timeout(15000),redirect:"error"});
+ let data:any;try{data=await res.json();}catch{throw new ApiError(res.status,"invalid_response","服务器未返回有效数据");}
+ if(res.status===401&&session&&!retried&&!path.startsWith("/api/v1/auth/")){
+  await navigator.locks.request("hub-refresh:"+p.id,async()=>{
+   const latest=getSession(p);if(latest?.token!==session.token)return;
+   const response=await fetch(p.url+"/api/v1/auth/refresh",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({refresh_token:session.refresh_token}),signal:AbortSignal.timeout(15000),redirect:"error"});
+   if(!response.ok){if(response.status===401){saveSession({...session,blocked:true},p);throw new ApiError(401,"session_revoked","请重新登录；本地修改仍保留");}throw new ApiError(response.status,"refresh_unavailable","暂时无法刷新登录，请稍后重试");}
+   saveSession(await response.json(),p);
+  });
+  if(profile().id!==p.id)throw new Error("服务器已切换");
+  return request<T>(path,init,true);
+ }
+ if(!res.ok)throw new ApiError(res.status,data.error??"error",data.message??"请求失败");
+ return data as T;
 }
 
 export type Provider = {
@@ -61,13 +58,16 @@ export type Bucket = {
   confidence: string;
   observed_at: string | null;
   note: string;
+  collection_status?: string;
   status: string;
 };
+
+export type AccountSummary = Account & { external_account_hint?: string };
 
 export type Account = {
   id: string;
   display_name: string;
-  external_account_hint: string;
+  external_account_hint?: string;
   region: string;
   provider: { id: string; slug: string; display_name: string };
   plan_name: string;
@@ -90,7 +90,7 @@ export type Rule = {
   rule_type: string;
   enabled: boolean;
   params: { ratio?: number; hours?: number };
-  provider_account_id: string;
+  provider_account_id?: string;
 };
 
 export type NotificationItem = {
@@ -100,6 +100,9 @@ export type NotificationItem = {
   severity: string;
   status: string;
   created_at: string;
+  provider_slug?: string;
+  provider_name?: string;
+  provider_account_id?: string;
 };
 
 export type Preview = {
@@ -124,15 +127,16 @@ export type Snapshot = {
 };
 
 export const api = {
-  register: (email: string, password: string) =>
-    request<{ token: string; user: { id: string; email: string } }>("/api/v1/auth/register", {
+ logout:()=>request("/api/v1/auth/logout",{method:"POST"}),
+  register: (email: string, password: string, device_name: string) =>
+    request<Session>("/api/v1/auth/register", {
       method: "POST",
-      body: JSON.stringify({ email, password }),
+      body: JSON.stringify({ email, password, device_name }),
     }),
-  login: (email: string, password: string) =>
-    request<{ token: string; user: { id: string; email: string } }>("/api/v1/auth/login", {
+  login: (email: string, password: string, device_name: string) =>
+    request<Session>("/api/v1/auth/login", {
       method: "POST",
-      body: JSON.stringify({ email, password }),
+      body: JSON.stringify({ email, password, device_name }),
     }),
   me: () => request<{ id: string; email: string; unread_count: number }>("/api/v1/me"),
   dashboard: () => request<Dashboard>("/api/v1/dashboard"),

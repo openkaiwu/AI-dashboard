@@ -1,0 +1,10 @@
+upstream
+.runtime
+.tools
+artifacts
+.git
+**/node_modules
+**/build
+**/.dart_tool
+**/.env
+apps/mobile

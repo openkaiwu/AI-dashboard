@@ -1,0 +1,63 @@
+{
+  "name": "aihub-desktop",
+  "version": "0.3.3",
+  "description": "AI Hub Codex quota companion",
+  "author": "AI Hub",
+  "license": "MIT",
+  "main": "main.cjs",
+  "scripts": {
+    "start": "electron .",
+    "package": "electron-packager . AIHub --platform=win32 --arch=x64 --out=../../artifacts/desktop --overwrite --prune=true --ignore=package-lock.json",
+    "dist": "electron-builder --win nsis"
+  },
+  "devDependencies": {
+    "@electron/packager": "^20.3.0",
+    "electron": "^44.4.3",
+    "electron-builder": "^26.0.12"
+  },
+  "build": {
+    "appId": "local.aihub.desktop",
+    "productName": "AI Hub",
+    "directories": {
+      "output": "../../artifacts/desktop/installer"
+    },
+    "files": [
+      "**/*",
+      "!resources/bin/**"
+    ],
+    "extraResources": [
+      {
+        "from": "resources/bin",
+        "to": "bin",
+        "filter": ["**/*"]
+      },
+      {
+        "from": "resources/bridge.example.json",
+        "to": "bridge.example.json"
+      },
+      {
+        "from": "resources/app-config.json",
+        "to": "app-config.json"
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        }
+      ],
+      "icon": "icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "AI Hub",
+      "installerLanguages": ["zh_CN", "en_US"],
+      "artifactName": "AIHub-Setup-${version}.${ext}",
+      "runAfterFinish": true
+    }
+  }
+}

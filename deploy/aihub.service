@@ -1,0 +1,19 @@
+[Unit]
+Description=AI Hub
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+User=aihub
+Group=aihub
+WorkingDirectory=/opt/aihub
+EnvironmentFile=/etc/aihub.env
+ExecStart=/opt/aihub/aihub-linux-amd64
+Restart=on-failure
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

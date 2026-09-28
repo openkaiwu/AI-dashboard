@@ -5,8 +5,11 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 )
@@ -44,9 +47,16 @@ func Error(w http.ResponseWriter, status int, code, message string) {
 
 func Decode(r *http.Request, dst any) error {
 	defer r.Body.Close()
-	dec := json.NewDecoder(r.Body)
+	dec := json.NewDecoder(io.LimitReader(r.Body, 1<<20))
 	dec.DisallowUnknownFields()
-	return dec.Decode(dst)
+	if err := dec.Decode(dst); err != nil {
+		return err
+	}
+	var extra any
+	if err := dec.Decode(&extra); err != io.EOF {
+		return fmt.Errorf("unexpected trailing JSON")
+	}
+	return nil
 }
 
 func RequestID(r *http.Request) string {
@@ -68,7 +78,7 @@ func (w *statusWriter) WriteHeader(code int) {
 
 func Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		id := strings.TrimSpace(r.Header.Get("X-Request-Id"))
+		id := ""
 		if id == "" {
 			id = NewID("req")
 		}
@@ -89,10 +99,19 @@ func Middleware(next http.Handler) http.Handler {
 func CORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		origin := r.Header.Get("Origin")
-		if origin == "" {
-			origin = "*"
+		allowed := origin == "" || origin == "https://"+r.Host || origin == "http://"+r.Host
+		for _, entry := range strings.Split(os.Getenv("AIHUB_ALLOWED_ORIGINS"), ",") {
+			if entry != "" && origin == strings.TrimSpace(entry) {
+				allowed = true
+			}
 		}
-		w.Header().Set("Access-Control-Allow-Origin", origin)
+		if !allowed {
+			Error(w, 403, "origin_denied", "Origin is not allowed")
+			return
+		}
+		if origin != "" {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+		}
 		w.Header().Set("Vary", "Origin")
 		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Request-Id, Idempotency-Key")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
