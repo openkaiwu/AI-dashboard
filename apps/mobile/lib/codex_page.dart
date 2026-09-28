@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'api.dart';
 import 'store.dart';
 import 'theme.dart';
@@ -23,14 +24,15 @@ class _CodexPageState extends State<CodexPage>
   late TabController tabs;
   String selectedDevice = '';
   String reminderFilter = 'pending';
+  double reservePercent = 10;
 
   @override
   void initState() {
     super.initState();
     tabs = TabController(length: 5, vsync: this);
     unawaited(load());
-    timer = Timer.periodic(
-        const Duration(minutes: 5), (_) => unawaited(refresh()));
+    timer =
+        Timer.periodic(const Duration(minutes: 5), (_) => unawaited(refresh()));
   }
 
   @override
@@ -191,9 +193,8 @@ class _CodexPageState extends State<CodexPage>
   Widget metricTile(Json m) {
     final remaining = (m['remaining'] as num).toDouble();
     final minutes = m['duration_minutes'] as int? ?? 0;
-    final title = minutes % 1440 == 0
-        ? '${minutes ~/ 1440} 天额度'
-        : '${minutes / 60} 小时额度';
+    final title =
+        minutes % 1440 == 0 ? '${minutes ~/ 1440} 天额度' : '${minutes / 60} 小时额度';
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(20),
@@ -233,6 +234,12 @@ class _CodexPageState extends State<CodexPage>
                 ? '暂不可估'
                 : '${(m['daily_budget'] as num).toStringAsFixed(1)}% / 天'),
           ]),
+          const SizedBox(height: 8),
+          Text(
+              m['rate_per_hour'] == null
+                  ? '样本不足，暂不预测耗尽时间'
+                  : '近期消耗 ${(m['rate_per_hour'] as num).toStringAsFixed(1)} 个百分点 / 小时',
+              style: Theme.of(context).textTheme.labelSmall),
         ]),
       ),
     );
@@ -244,10 +251,12 @@ class _CodexPageState extends State<CodexPage>
       child: Padding(
         padding: const EdgeInsets.all(20),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          const Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-            Text('备用重置卡', style: TextStyle(color: HubTheme.muted)),
-            Text('↺', style: TextStyle(color: HubTheme.accent)),
-          ]),
+          const Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text('备用重置卡', style: TextStyle(color: HubTheme.muted)),
+                Text('↺', style: TextStyle(color: HubTheme.accent)),
+              ]),
           const SizedBox(height: 16),
           Text(credits == null ? '—' : '${credits['available_count']}',
               style: const TextStyle(
@@ -297,8 +306,7 @@ class _CodexPageState extends State<CodexPage>
         ),
       );
     }
-    final metrics =
-        (d?['analysis']?['metrics'] as List?)?.cast<Json>() ?? [];
+    final metrics = (d?['analysis']?['metrics'] as List?)?.cast<Json>() ?? [];
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       hero(d, isStale),
       const SizedBox(height: 16),
@@ -307,34 +315,173 @@ class _CodexPageState extends State<CodexPage>
     ]);
   }
 
-  Widget planTab(Json? d) {
+  Widget planTab(Json? d, bool isStale) {
     final metrics = (d?['analysis']?['metrics'] as List?)?.cast<Json>() ?? [];
+    final credits =
+        (d?['snapshot']?['reset_credits']?['items'] as List?)?.cast<Json>() ??
+            [];
+    final events = <({String title, int at})>[
+      for (final m in metrics)
+        if (m['resets_at'] is num)
+          (
+            title:
+                '${m['bucket']} · ${(m['duration_minutes'] as num) / 60} 小时窗口重置',
+            at: (m['resets_at'] as num).toInt()
+          ),
+      for (final c in credits)
+        if (c['expires_at'] is num)
+          (title: '重置卡到期', at: (c['expires_at'] as num).toInt()),
+    ]..sort((a, b) => a.at.compareTo(b.at));
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       Text('使用计划', style: Theme.of(context).textTheme.titleMedium),
-      const Text('按已观测的额度与重置时间估算；数据不足时不推断。'),
-      for (final m in metrics) Card(child: Padding(padding: const EdgeInsets.all(16), child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text('${m['bucket']} · ${(m['duration_minutes'] as num) / 60} 小时额度'),
-          Text('剩余 ${(m['remaining'] as num).toStringAsFixed(0)}% · 距重置 ${hours(m['hours_left'] as num?)}'),
-          Text(m['daily_budget'] == null ? '暂无可靠的每日预算' : '均匀使用参考：每天 ${(m['daily_budget'] as num).toStringAsFixed(1)}%'),
-        ],
-      ))),
+      const Text('按已观测的额度与重置时间估算；数据不足时不推断。预留值只用于本次试算。'),
+      const SizedBox(height: 12),
+      Text('预留额度：${reservePercent.round()} 个百分点'),
+      Slider(
+          value: reservePercent,
+          min: 0,
+          max: 50,
+          divisions: 10,
+          label: '${reservePercent.round()}%',
+          onChanged: (v) => setState(() => reservePercent = v)),
+      for (final m in metrics)
+        Card(
+            child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                        '${m['bucket']} · ${(m['duration_minutes'] as num) / 60} 小时额度'),
+                    Text(
+                        '剩余 ${(m['remaining'] as num).toStringAsFixed(0)}% · 距重置 ${hours(m['hours_left'] as num?)}'),
+                    Builder(builder: (_) {
+                      final left = m['hours_left'] as num?;
+                      if (isStale || left == null || left <= 0) {
+                        return const Text('等待有效数据，暂不计算预算。');
+                      }
+                      final available =
+                          ((m['remaining'] as num).toDouble() - reservePercent)
+                              .clamp(0.0, 100.0);
+                      final nextDay = available * (24 / left).clamp(0.0, 1.0);
+                      return Text(
+                          '本轮可分配 ${available.toStringAsFixed(1)} 个百分点 · 未来 24 小时最多 ${nextDay.toStringAsFixed(1)} 个百分点');
+                    }),
+                  ],
+                ))),
       if (metrics.isEmpty) const Text('暂无可制定计划的额度窗口。'),
+      const SizedBox(height: 16),
+      Text('重置与到期时间线', style: Theme.of(context).textTheme.titleMedium),
+      if (isStale) const Text('快照已过期，以下仅为最后已知时间。'),
+      if (events.isEmpty) const Text('尚未返回明确的重置或到期时间。'),
+      for (final event in events)
+        ListTile(
+          title: Text(event.title),
+          subtitle: Text(DateTime.fromMillisecondsSinceEpoch(event.at * 1000)
+              .toLocal()
+              .toString()
+              .split('.')
+              .first),
+          trailing: event.at * 1000 <= DateTime.now().millisecondsSinceEpoch
+              ? const Text('待采集确认')
+              : null,
+        ),
+      Text('当前电脑最近采集 ${(d?['history'] as List?)?.length ?? 0} 次。历史导出请在桌面端操作。'),
     ]);
+  }
+
+  Future<void> editPreference(
+      String key, String label, int min, int max) async {
+    final prefs = overview?['preferences'] as Json?;
+    if (prefs == null) return;
+    final value = await showDialog<int>(
+      context: context,
+      builder: (_) => _PreferenceDialog(
+          label: label, initialValue: '${prefs[key]}', min: min, max: max),
+    );
+    if (value == null || !mounted) return;
+    try {
+      await widget.api
+          .call('PATCH', '/api/v1/codex/preferences', {...prefs, key: value});
+      await refresh();
+    } catch (_) {
+      if (mounted) setState(() => error = '规则保存失败');
+    }
+  }
+
+  Future<void> openOriginal(String raw) async {
+    final uri = Uri.tryParse(raw);
+    if (uri == null ||
+        uri.scheme != 'https' ||
+        uri.host != 'x.com' ||
+        !RegExp(r'^/thsottiaux/status/\d+$').hasMatch(uri.path)) {
+      return;
+    }
+    try {
+      await const MethodChannel('dev.aihub/mobile_links')
+          .invokeMethod<bool>('openOriginal', {'url': uri.toString()});
+    } on PlatformException {
+      if (mounted) setState(() => error = '无法打开原帖');
+    } on MissingPluginException {
+      if (mounted) setState(() => error = '当前平台不支持打开原帖');
+    }
   }
 
   Widget radarTab(Json? d) {
     final metrics = (d?['analysis']?['metrics'] as List?)?.cast<Json>() ?? [];
     final news = d?['snapshot']?['news'] as Json?;
     final items = (news?['items'] as List?)?.cast<Json>() ?? [];
+    final checkedAt = DateTime.tryParse(news?['checked_at']?.toString() ?? '');
+    final expired =
+        checkedAt == null || DateTime.now().difference(checkedAt).inHours >= 3;
+    final status = news == null
+        ? '尚未检查'
+        : expired
+            ? '检查记录已过期'
+            : news['status'] == 'checked'
+                ? '已完成本次检查'
+                : '本次无法确认';
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       Text('重置雷达', style: Theme.of(context).textTheme.titleMedium),
       const Text('账户重置以本机采集到的窗口为准；外部消息仅供参考。'),
       for (final m in metrics.where((m) => m['resets_at'] != null))
-        ListTile(title: Text('${m['bucket']} · ${(m['duration_minutes'] as num) / 60} 小时'),
-          subtitle: Text('重置于 ${DateTime.fromMillisecondsSinceEpoch((m['resets_at'] as num).toInt() * 1000).toLocal()}')),
-      if (metrics.every((m) => m['resets_at'] == null)) const Text('暂无可核实的重置时间。'),
-      for (final item in items) Card(child: Padding(padding: const EdgeInsets.all(14), child: Text(item['summary']?.toString() ?? ''))),
+        ListTile(
+            title: Text(
+                '${m['bucket']} · ${(m['duration_minutes'] as num) / 60} 小时'),
+            subtitle: Text(
+                '重置于 ${DateTime.fromMillisecondsSinceEpoch((m['resets_at'] as num).toInt() * 1000).toLocal()}')),
+      if (metrics.every((m) => m['resets_at'] == null))
+        const Text('暂无可核实的重置时间。'),
+      const SizedBox(height: 16),
+      Text('Tibo 重置消息 · 每 3 小时检查',
+          style: Theme.of(context).textTheme.titleMedium),
+      Text(status,
+          style: TextStyle(
+              color: expired || news?['status'] != 'checked'
+                  ? HubTheme.warn
+                  : HubTheme.accent)),
+      Text(news == null ? '等待电脑同步检查结果' : '上次尝试 ${when(news['checked_at'])}'),
+      for (final item in items)
+        Card(
+            child: Padding(
+                padding: const EdgeInsets.all(14),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                        '${item['approximate_time'] == true ? '约 ' : ''}${when(item['published_at'])}',
+                        style: Theme.of(context).textTheme.labelSmall),
+                    const SizedBox(height: 6),
+                    Text(item['summary']?.toString() ?? ''),
+                    TextButton(
+                        onPressed: () =>
+                            openOriginal(item['url']?.toString() ?? ''),
+                        child: const Text('查看原帖 ↗')),
+                  ],
+                ))),
+      if (news?['status'] == 'checked' && items.isEmpty)
+        const Text('本次未发现可确认的新重置消息。'),
+      const Text('外部消息不会修改账户额度或重置时间；无法确认不等于没有消息。'),
     ]);
   }
 
@@ -349,12 +496,10 @@ class _CodexPageState extends State<CodexPage>
   }
 
   Widget remindersTab() {
-    final alerts =
-        (overview?['alerts'] as List?)?.cast<Json>() ?? [];
+    final alerts = (overview?['alerts'] as List?)?.cast<Json>() ?? [];
     final visible =
         alerts.where((a) => alertState(a) == reminderFilter).toList();
-    final pending =
-        alerts.where((a) => alertState(a) == 'pending').length;
+    final pending = alerts.where((a) => alertState(a) == 'pending').length;
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       Row(children: [
         Text('值得留意', style: Theme.of(context).textTheme.titleMedium),
@@ -380,7 +525,8 @@ class _CodexPageState extends State<CodexPage>
           ['dismissed', '已忽略'],
         ])
           FilterChip(
-            label: Text('${entry[1]} · ${alerts.where((a) => alertState(a) == entry[0]).length}'),
+            label: Text(
+                '${entry[1]} · ${alerts.where((a) => alertState(a) == entry[0]).length}'),
             selected: reminderFilter == entry[0],
             onSelected: (_) => setState(() => reminderFilter = entry[0]),
           ),
@@ -440,12 +586,17 @@ class _CodexPageState extends State<CodexPage>
         ],
         onChanged: (value) async {
           if (value == null) return;
-          try { await widget.api.call('PUT', '/api/v1/codex/plan', {'plan_type': value}); await refresh(); }
-          catch (_) { if (mounted) setState(() => error = '套餐设置失败'); }
+          try {
+            await widget.api
+                .call('PUT', '/api/v1/codex/plan', {'plan_type': value});
+            await refresh();
+          } catch (_) {
+            if (mounted) setState(() => error = '套餐设置失败');
+          }
         },
       ),
       const SizedBox(height: 8),
-      const Text('规则跨端保存；手机端暂不支持系统推送，仅站内提醒。'),
+      const Text('规则跨端保存；手机端暂不支持系统级后台推送。'),
       const SizedBox(height: 16),
       if (prefs != null)
         SwitchListTile(
@@ -455,7 +606,27 @@ class _CodexPageState extends State<CodexPage>
           onChanged: toggleReminders,
         ),
       const SizedBox(height: 8),
-      const Text('更多阈值可在网页版「提醒设置」中调整。'),
+      if (overview?['quiet'] == true) const Text('当前处于免打扰时段，站内提醒仍可查看。'),
+      if (prefs != null)
+        for (final field in const [
+          ('near_hours', '临近重置 · 小时', 1, 168),
+          ('spare_percent', '多用提醒 · 剩余至少 %', 10, 95),
+          ('low_percent', '低额度提醒 · 剩余不超过 %', 1, 30),
+          ('pace_lead', '超前消耗 · 百分点', 5, 70),
+          ('credit_hours', '重置卡到期前 · 小时', 1, 168),
+          ('cooldown_hours', '重复提醒间隔 · 小时', 1, 48),
+          ('quiet_start', '免打扰开始 · 当地时', 0, 23),
+          ('quiet_end', '免打扰结束 · 当地时', 0, 23),
+          ('utc_offset_minutes', '时区 · UTC 偏移分钟', -720, 840),
+        ])
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            title: Text(field.$2),
+            subtitle: Text('${prefs[field.$1]}'),
+            trailing: const Icon(Icons.edit_outlined),
+            onTap: () => editPreference(field.$1, field.$2, field.$3, field.$4),
+          ),
+      const Text('规则保存在账户中，两端同步。'),
     ]);
   }
 
@@ -482,15 +653,14 @@ class _CodexPageState extends State<CodexPage>
         const SizedBox(width: 8),
         Expanded(
           child: Text(
-            isStale
-                ? '等待电脑新数据'
-                : '${d?['name'] ?? '电脑'} · 已同步',
+            isStale ? '等待电脑新数据' : '${d?['name'] ?? '电脑'} · 已同步',
             style: Theme.of(context).textTheme.labelSmall,
           ),
         ),
         if (devices.length > 1)
           DropdownButton<String>(
-            value: selectedDevice.isEmpty ? devices.first['id'] : selectedDevice,
+            value:
+                selectedDevice.isEmpty ? devices.first['id'] : selectedDevice,
             items: [
               for (final item in devices)
                 DropdownMenuItem(
@@ -508,6 +678,8 @@ class _CodexPageState extends State<CodexPage>
           padding: const EdgeInsets.only(top: 8),
           child: Text(error!, style: const TextStyle(color: HubTheme.warn)),
         ),
+      if (overview?['plan']?['plan_type'] == 'unknown')
+        const Text('Codex 套餐尚未确认，请在提醒设置中选择 Plus 或 Pro。'),
       const SizedBox(height: 12),
       TabBar(
         controller: tabs,
@@ -529,7 +701,7 @@ class _CodexPageState extends State<CodexPage>
           controller: tabs,
           children: [
             ListView(children: [overviewTab(d, isStale)]),
-            ListView(children: [planTab(d)]),
+            ListView(children: [planTab(d, isStale)]),
             ListView(children: [remindersTab()]),
             ListView(children: [radarTab(d)]),
             ListView(children: [settingsTab()]),
@@ -538,4 +710,65 @@ class _CodexPageState extends State<CodexPage>
       ),
     ]);
   }
+}
+
+class _PreferenceDialog extends StatefulWidget {
+  final String label;
+  final String initialValue;
+  final int min;
+  final int max;
+  const _PreferenceDialog(
+      {required this.label,
+      required this.initialValue,
+      required this.min,
+      required this.max});
+
+  @override
+  State<_PreferenceDialog> createState() => _PreferenceDialogState();
+}
+
+class _PreferenceDialogState extends State<_PreferenceDialog> {
+  late final TextEditingController controller;
+
+  @override
+  void initState() {
+    super.initState();
+    controller = TextEditingController(text: widget.initialValue);
+  }
+
+  @override
+  void dispose() {
+    controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+        title: Text(widget.label),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          keyboardType: const TextInputType.numberWithOptions(signed: true),
+          inputFormatters: [
+            FilteringTextInputFormatter.allow(RegExp(r'[-0-9]'))
+          ],
+          decoration:
+              InputDecoration(helperText: '允许范围：${widget.min} 至 ${widget.max}'),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(context), child: const Text('取消')),
+          FilledButton(
+              onPressed: () {
+                final parsed = int.tryParse(controller.text);
+                if (parsed == null ||
+                    parsed < widget.min ||
+                    parsed > widget.max) {
+                  return;
+                }
+                Navigator.pop(context, parsed);
+              },
+              child: const Text('保存')),
+        ],
+      );
 }
