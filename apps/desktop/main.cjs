@@ -2,6 +2,11 @@ const {app,BrowserWindow,Tray,Menu,nativeImage,ipcMain,dialog,shell}=require('el
 const fs=require('node:fs');
 const path=require('node:path');
 const runtime=require('./runtime.cjs');
+if(typeof process!=='undefined'&&process.env.AIHUB_PREVIEW_USER_DATA){
+ const previewDir=path.resolve(process.env.AIHUB_PREVIEW_USER_DATA);
+ fs.mkdirSync(previewDir,{recursive:true});
+ app.setPath('userData',previewDir);
+}
 let win,tray,quitting=false,alertOpen=false;
 function uiOrigin(){return runtime.getUiOrigin();}
 function allowOrigin(url){try{return new URL(url).origin===uiOrigin();}catch{return false;}}
