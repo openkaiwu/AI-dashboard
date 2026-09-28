@@ -24,13 +24,13 @@ with zipfile.ZipFile(source_zip,'w',zipfile.ZIP_DEFLATED) as archive:
     for p in sorted(source_files):archive.write(p,'aihub-m0/'+p.relative_to(root).as_posix())
 runtime_zip=artifacts/'aihub-m0-runtime.zip'
 with zipfile.ZipFile(runtime_zip,'w',zipfile.ZIP_DEFLATED) as archive:
-    for name in ['aihub-linux-amd64','aihub-windows-amd64.exe','aihub-bridge-linux-amd64','aihub-bridge-windows-amd64.exe']:
+    for name in ['aihub-linux-amd64','aihub-windows-amd64.exe','aihub-bridge-linux-amd64','aihub-bridge-windows-amd64.exe','aihub-admin-linux-amd64','aihub-admin-windows-amd64.exe']:
         p=artifacts/'aihub-m0'/name
         if not p.is_file() or p.stat().st_size<1_000_000:raise RuntimeError('Missing built server: '+name)
         info=zipfile.ZipInfo('aihub-m0/'+name)
         info.external_attr=(0o100755 << 16)
         archive.writestr(info,p.read_bytes(),compress_type=zipfile.ZIP_DEFLATED)
-    for name in ['DEPLOYMENT_ZH.md','VALIDATION.md','CONTRACTS.md','UPSTREAM.md','CODEX_CONNECTION_ZH.md','CODEX_ADVISOR_ZH.md','CODEX_WORKSPACE_ZH.md','DESKTOP_APP_ZH.md']:
+    for name in ['DEPLOYMENT_ZH.md','VALIDATION.md','CONTRACTS.md','UPSTREAM.md','CODEX_CONNECTION_ZH.md','CODEX_ADVISOR_ZH.md','CODEX_WORKSPACE_ZH.md','DESKTOP_APP_ZH.md','M1_M2_IMPLEMENTATION_20260928_ZH.md']:
         archive.write(root/'docs'/name,'aihub-m0/docs/'+name)
     for name in ['Start-Codex-Bridge.ps1','Stop-Codex-Bridge.ps1','bridge.example.json']:
         archive.write(root/'bridge'/name,'aihub-m0/bridge/'+name)

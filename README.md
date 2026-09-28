@@ -45,14 +45,15 @@ powershell -ExecutionPolicy Bypass -File scripts/Stop-Local.ps1
 
 ## 文档与产物
 
-- [当前开发进度（2026-09-23）](docs/DEVELOPMENT_PROGRESS_20260923_ZH.md)
+- [M1/M2 与账户绑定源码进度（2026-09-28）](docs/M1_M2_IMPLEMENTATION_20260928_ZH.md)
+- [早期 M0 进度快照](docs/DEVELOPMENT_PROGRESS_20260923_ZH.md)
 - [开发思路及 M0/M1/M2 边界](docs/DEVELOPMENT_PLAN_ZH.md)
 - [冻结协议、模块所有权、威胁模型](docs/CONTRACTS.md)
 - [运行、公网 HTTPS、自部署与备份](docs/DEPLOYMENT_ZH.md)
 - [验证记录与尚未验证的内容](docs/VALIDATION.md)
 - [上游版本与授权来源](docs/UPSTREAM.md)
 
-运行包：artifacts/aihub-m0-runtime.zip。完整源码/部署包：artifacts/aihub-m0-source.zip。
+旧 M0 运行包：artifacts/aihub-m0-runtime.zip。M1/M2 分支的源码检查与交叉编译已完成；当前旧运行进程与安装包尚未替换。
 运行包不含数据库、账号凭据或示例用户数据；请配置自己的 PostgreSQL。
 Android APK 和 Windows Flutter 原生客户端未在本机打包；可运行桌面产物为服务端 + Web/PWA。
 

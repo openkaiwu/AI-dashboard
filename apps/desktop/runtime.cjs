@@ -1,4 +1,4 @@
-const {app}=require('electron');
+const {app,safeStorage}=require('electron');
 const {spawn,execFile}=require('node:child_process');
 const crypto=require('node:crypto');
 const fs=require('node:fs');
@@ -17,6 +17,12 @@ let activeMode=null;
 function readJson(file){try{return JSON.parse(fs.readFileSync(file,'utf8'));}catch{return null;}}
 function dataDir(){return path.join(app.getPath('userData'),'runtime');}
 function ensureDataDir(){const dir=dataDir();fs.mkdirSync(dir,{recursive:true});return dir;}
+function secretPath(name){return path.join(ensureDataDir(),name+'.protected');}
+function readSecret(name){try{return safeStorage.decryptString(fs.readFileSync(secretPath(name)));}catch{return '';}}
+function writeSecret(name,value){if(!safeStorage.isEncryptionAvailable())throw Error('系统凭据保护不可用');fs.writeFileSync(secretPath(name),safeStorage.encryptString(value),{mode:0o600});}
+function extensionPairCode(){let code=readSecret('extension-pair');if(!code){code=crypto.randomBytes(24).toString('hex');writeSecret('extension-pair',code)}return code;}
+function readDesktopSession(profileId){const all=readSecret('sessions');try{return JSON.parse(all||'{}')[profileId]||null;}catch{return null;}}
+function writeDesktopSession(profileId,session){let all={};try{all=JSON.parse(readSecret('sessions')||'{}');}catch{}if(session)all[profileId]=session;else delete all[profileId];writeSecret('sessions',JSON.stringify(all));}
 const DEV_BIN={'aihub-server.exe':'aihub-windows-amd64.exe','aihub-bridge.exe':'aihub-bridge-windows-amd64.exe'};
 function binPath(name){
  if(!app.isPackaged){return path.join(__dirname,'..','..','artifacts','aihub-m0',DEV_BIN[name]||name);}
@@ -31,6 +37,13 @@ function loadConfig(dir){
  const cfg={uiMode:'ask',cloudServer:DEFAULT_CLOUD,profileId:'public-cloud',profileName:'公网 AI Hub',bridgeIntervalSeconds:300,...bundledConfig(),...readJson(path.join(dir,'app-config.json'))};
  cachedConfig=cfg;
  return cfg;
+}
+function setCloudServer(input){
+ const u=new URL(input);
+ if(u.username||u.password||u.search||u.hash||u.pathname!=='/'||!(u.protocol==='https:'||(u.protocol==='http:'&&['localhost','127.0.0.1','[::1]'].includes(u.hostname))))throw Error('请输入 HTTPS 服务器根地址；本机开发可使用 localhost HTTP');
+ const dir=ensureDataDir(),file=path.join(dir,'app-config.json');
+ fs.writeFileSync(file,JSON.stringify({...readJson(file),cloudServer:u.origin,uiMode:'cloud'},null,2),{mode:0o600});
+ cachedConfig=null;activeMode='cloud';return u.origin;
 }
 function getActiveMode(config=loadConfig(ensureDataDir())){
  if(activeMode)return activeMode;
@@ -58,19 +71,6 @@ function forceLocalMode(){
  const dir=ensureDataDir();
  const prev=readJson(path.join(dir,'app-config.json'))||{};
  fs.writeFileSync(path.join(dir,'app-config.json'),JSON.stringify({...prev,uiMode:'local',cloudFallback:true},null,2));
-}
-function migrateFromDev(dir){
- if(fs.existsSync(path.join(dir,'bridge.json')))return;
- const roots=[process.env.AIHUB_DEV_ROOT,path.join(process.env.USERPROFILE||'','source','repos','AIDASH')].filter(Boolean);
- for(const root of roots){
-  const src=path.join(root,'.runtime');
-  if(!fs.existsSync(src))continue;
-  for(const name of ['bridge.json','bootstrap.json','server.env']){
-   const from=path.join(src,name),to=path.join(dir,name);
-   if(fs.existsSync(from)&&!fs.existsSync(to))fs.copyFileSync(from,to);
-  }
-  return;
- }
 }
 function readEnvFile(file){
  const line=fs.readFileSync(file,'utf8').split(/\r?\n/).find(l=>l.startsWith('export AIHUB_DATABASE_URL='));
@@ -111,7 +111,7 @@ function httpsJson(method,urlStr,body,headers={}){
  return new Promise((resolve,reject)=>{
   const u=new URL(urlStr);
   const data=body?JSON.stringify(body):null;
-  const req=https.request({hostname:u.hostname,port:u.port||443,path:u.pathname+u.search,method,headers:{'Content-Type':'application/json',...headers,...(data?{'Content-Length':Buffer.byteLength(data)}:{})},rejectUnauthorized:false,timeout:15000,servername:u.hostname},res=>{
+  const req=https.request({hostname:u.hostname,port:u.port||443,path:u.pathname+u.search,method,headers:{'Content-Type':'application/json',...headers,...(data?{'Content-Length':Buffer.byteLength(data)}:{})},timeout:15000,servername:u.hostname},res=>{
    let raw='';
    res.on('data',c=>{raw+=c;});
    res.on('end',()=>{try{const parsed=JSON.parse(raw||'{}');if(res.statusCode>=300)reject(new Error(parsed.message||parsed.error||`HTTP ${res.statusCode}`));else resolve(parsed);}catch(e){reject(e);}});
@@ -173,7 +173,7 @@ async function ensureServer(dir){
  if(fs.existsSync(pidFile)){
   try{process.kill(Number(fs.readFileSync(pidFile,'utf8').trim()),0);if(await waitReady(LOCAL_ORIGIN,3000))return;}catch{}
  }
- const child=spawnHidden(serverExe,[],dir,{AIHUB_DATABASE_URL:dbUrl,AIHUB_ADDR:'127.0.0.1:8080',AIHUB_DEMO:'true'});
+ const child=spawnHidden(serverExe,[],dir,{AIHUB_DATABASE_URL:dbUrl,AIHUB_ADDR:'127.0.0.1:8080'});
  fs.writeFileSync(pidFile,String(child.pid));
  managed.server=child;
  child.on('exit',()=>{if(managed.server===child)managed.server=null;});
@@ -195,9 +195,7 @@ function findCodexExe(){
  }
  return '';
 }
-function bridgeReady(cfg){
- return cfg&&cfg.token&&cfg.token!=='CREATE_A_CONNECTION_IN_AI_HUB'&&cfg.server;
-}
+function bridgeReady(cfg){return cfg&&cfg.server&&cfg.device_id&&readSecret('bridge-token');}
 async function apiJson(url,options={}){
  const u=new URL(url);
  if(u.protocol==='https:'){
@@ -210,55 +208,33 @@ async function apiJson(url,options={}){
  if(!res.ok)throw new Error(parsed.message||parsed.error||`请求失败 (${res.status})`);
  return parsed;
 }
-async function cloudLogin(server,email,password,deviceName){
- return apiJson(`${server.replace(/\/$/,'')}/api/v1/auth/login`,{method:'POST',body:JSON.stringify({email,password,device_name:deviceName})});
-}
 async function createBridgeToken(server,accessToken,name){
  const out=await apiJson(`${server.replace(/\/$/,'')}/api/v1/codex/bridges`,{method:'POST',headers:{Authorization:`Bearer ${accessToken}`},body:JSON.stringify({name})});
  return out.token;
 }
-function writeBridge(dir,cfg){fs.writeFileSync(path.join(dir,'bridge.json'),JSON.stringify(cfg,null,2));}
-async function autoProvisionBridge(dir,config){
- const cfgPath=path.join(dir,'bridge.json');
- let cfg=readJson(cfgPath);
- if(bridgeReady(cfg)){
-  const codex=cfg.codex_path&&fs.existsSync(cfg.codex_path)?cfg.codex_path:findCodexExe();
-  if(codex&&cfg.codex_path!==codex){cfg.codex_path=codex;writeBridge(dir,cfg);}
-  return cfg;
- }
- const bootstrap=readJson(path.join(dir,'bootstrap.json'));
- if(!bootstrap?.email||!bootstrap?.password)return cfg;
- const server=(bootstrap.cloudServer||config.cloudServer||DEFAULT_CLOUD).replace(/\/$/,'');
- try{
-  const session=await cloudLogin(server,bootstrap.email,bootstrap.password,bootstrap.deviceName||'我的电脑');
-  const token=await createBridgeToken(server,session.token,bootstrap.bridgeName||'我的电脑');
-  cfg={server,token,codex_path:findCodexExe()||'',cursor_enabled:true,interval_seconds:config.bridgeIntervalSeconds||300};
-  writeBridge(dir,cfg);
-  return cfg;
- }catch(e){
-  lastError=`云端采集器配置失败：${e.message}`;
-  return cfg;
- }
-}
+function writeBridge(dir,cfg,token){writeSecret('bridge-token',token);fs.writeFileSync(path.join(dir,'bridge.json'),JSON.stringify(cfg,null,2),{mode:0o600});}
 function ensureBridgeConfig(dir,config){
  const cfgPath=path.join(dir,'bridge.json');
- if(fs.existsSync(cfgPath))return cfgPath;
+ if(fs.existsSync(cfgPath)){
+  const existing=readJson(cfgPath);
+  if(existing?.token){delete existing.token;fs.writeFileSync(cfgPath,JSON.stringify(existing,null,2),{mode:0o600});}
+  return cfgPath;
+ }
  const example=app.isPackaged?path.join(process.resourcesPath,'bridge.example.json'):path.join(__dirname,'resources','bridge.example.json');
-  const seed=readJson(example)||{server:config.cloudServer||DEFAULT_CLOUD,token:'CREATE_A_CONNECTION_IN_AI_HUB',codex_path:'',cursor_enabled:true,interval_seconds:300};
+  const seed=readJson(example)||{server:config.cloudServer||DEFAULT_CLOUD,codex_path:'',cursor_enabled:true,interval_seconds:300};
+ delete seed.token;
  fs.writeFileSync(cfgPath,JSON.stringify(seed,null,2));
  return cfgPath;
 }
 async function ensureBridge(dir,config){
  ensureBridgeConfig(dir,config);
- await autoProvisionBridge(dir,config);
  const cfgPath=path.join(dir,'bridge.json');
  let cfg=readJson(cfgPath);
  if(!bridgeReady(cfg))return;
  if(!cfg.codex_path||!fs.existsSync(cfg.codex_path)){
   const found=findCodexExe();
-  if(!found)return;
-  cfg.codex_path=found;
-  writeBridge(dir,cfg);
+  cfg.codex_path=found||'';
+  fs.writeFileSync(cfgPath,JSON.stringify(cfg,null,2),{mode:0o600});
  }
  const bridgeExe=binPath('aihub-bridge.exe');
  if(!fs.existsSync(bridgeExe))return;
@@ -266,7 +242,7 @@ async function ensureBridge(dir,config){
  if(fs.existsSync(stateFile)){
   try{const saved=JSON.parse(fs.readFileSync(stateFile,'utf8'));process.kill(saved.Id,0);return;}catch{fs.unlinkSync(stateFile);}
  }
- const child=spawnHidden(bridgeExe,['--config',cfgPath],dir);
+ const child=spawnHidden(bridgeExe,['--config',cfgPath],dir,{AIHUB_BRIDGE_TOKEN:readSecret('bridge-token'),AIHUB_EXTENSION_PAIR_CODE:extensionPairCode()});
  fs.writeFileSync(stateFile,JSON.stringify({Id:child.pid,Binary:bridgeExe}));
  managed.bridge=child;
  child.on('exit',(code)=>{if(managed.bridge===child){managed.bridge=null;try{fs.unlinkSync(stateFile);}catch{}} if(code)lastError=`Codex 采集器退出 (${code})`;});
@@ -275,57 +251,47 @@ async function ensureReady(){
  if(process.env.AIHUB_DESKTOP_SKIP_RUNTIME==='1')return;
  try{
   const dir=ensureDataDir();
-  migrateFromDev(dir);
   const config=loadConfig(dir);
   await resolveActiveMode(dir,config);
   if(getActiveMode(config)==='local'){
    await ensurePostgres(dir);
    await ensureServer(dir);
   }
-  await ensureBridge(dir,config);
+  ensureBridgeConfig(dir,config);
  }catch(e){
   lastError=e.message||String(e);
   throw e;
  }
 }
-function readBootstrap(dir=ensureDataDir()){return readJson(path.join(dir,'bootstrap.json'));}
-async function injectWebSession(webContents,config){
- const mode=getActiveMode(config);
- const bootstrap=readBootstrap();
- const has=await webContents.executeJavaScript(`(()=>{try{const id=localStorage.getItem('hub_profile')||'${mode==='local'?'local-default':config.profileId}';return !!localStorage.getItem('hub_session:'+id);}catch{return false;}})()`,true);
- if(has)return true;
- let session;
- let profile;
- if(mode==='local'){
-  session=await apiJson(`${LOCAL_ORIGIN}/api/v1/auth/login`,{method:'POST',body:JSON.stringify({email:'demo@aihub.local',password:'demo1234',device_name:'我的电脑'})});
-  profile={id:'local-default',name:'本地 AI Hub',url:LOCAL_ORIGIN};
- }else{
-  if(!bootstrap?.email||!bootstrap?.password)return false;
-  const server=(bootstrap.cloudServer||config.cloudServer||DEFAULT_CLOUD).replace(/\/$/,'');
-  session=await cloudLogin(server,bootstrap.email,bootstrap.password,bootstrap.deviceName||'我的电脑');
-  profile={id:config.profileId,name:config.profileName,url:server};
- }
- await webContents.executeJavaScript(`(()=>{const profile=${JSON.stringify(profile)};const session=${JSON.stringify(session)};localStorage.setItem('hub_profiles',JSON.stringify([profile]));localStorage.setItem('hub_profile',profile.id);localStorage.setItem('hub_session:'+profile.id,JSON.stringify(session));localStorage.setItem('hub_advisor:'+profile.url+'|'+session.user.id+':strong','on');})()`,true);
- return true;
-}
 async function syncBridgeFromSession(webContents,config){
- if(getActiveMode(config)==='local')return;
  const dir=ensureDataDir();
- if(bridgeReady(readJson(path.join(dir,'bridge.json'))))return;
- const picked=await webContents.executeJavaScript(`(()=>{try{const id=localStorage.getItem('hub_profile');const profiles=JSON.parse(localStorage.getItem('hub_profiles')||'[]');const profile=profiles.find(p=>p.id===id)||profiles[0];const session=JSON.parse(localStorage.getItem('hub_session:'+profile.id)||'null');return session?{server:profile.url,token:session.token}:null;}catch{return null;}})()`,true);
- if(!picked?.token)return;
+ const picked=await webContents.executeJavaScript(`(()=>{try{const id=localStorage.getItem('hub_profile');const profiles=JSON.parse(localStorage.getItem('hub_profiles')||'[]');const profile=profiles.find(p=>p.id===id)||profiles[0]||{id:'default',url:location.origin};return {id:profile.id,server:profile.url};}catch{return null;}})()`,true);
+ const session=picked?readDesktopSession(picked.id):null;
+ if(!session?.token){stopBridge();return;}
+ const existing=readJson(path.join(dir,'bridge.json'));
+ if(bridgeReady(existing)&&existing.server===picked.server&&existing.device_id===session.device_id){await ensureBridge(dir,config);return;}
+ stopBridge();
  try{
-  const token=await createBridgeToken(picked.server,picked.token,'我的电脑');
-  writeBridge(dir,{server:picked.server,token,codex_path:findCodexExe()||'',interval_seconds:config.bridgeIntervalSeconds||300});
+  const token=await createBridgeToken(picked.server,session.token,'我的电脑');
+  writeBridge(dir,{server:picked.server,device_id:session.device_id,codex_path:findCodexExe()||'',cursor_enabled:true,interval_seconds:config.bridgeIntervalSeconds||300},token);
   await ensureBridge(dir,config);
- }catch{}
+ }catch(e){lastError=`采集器连接失败：${e.message}`;}
+}
+function stopBridge(){
+ const child=managed.bridge;if(child&&!child.killed){try{child.kill();}catch{}}
+ managed.bridge=null;
+ const stateFile=path.join(ensureDataDir(),'bridge-process.json');
+ const saved=readJson(stateFile);
+ if(saved?.Binary===binPath('aihub-bridge.exe')&&Number.isInteger(saved.Id)){try{process.kill(saved.Id);}catch{}}
+ try{fs.unlinkSync(stateFile);}catch{}
 }
 function stopManaged(){
- for(const key of ['bridge','server']){
+ stopBridge();
+ for(const key of ['server']){
   const child=managed[key];
   if(child&&!child.killed){try{child.kill();}catch{}}
   managed[key]=null;
  }
 }
 function startupMessage(){return lastError||'';}
-module.exports={ensureReady,stopManaged,startupMessage,getUiOrigin,getActiveMode,setUserMode,forceLocalMode,resetMode,clearModePreference,readModePreference,probeCloud,loadConfig,dataDir,injectWebSession,syncBridgeFromSession,LOCAL_ORIGIN,ORIGIN:LOCAL_ORIGIN,DEFAULT_CLOUD};
+module.exports={ensureReady,stopManaged,stopBridge,startupMessage,getUiOrigin,getActiveMode,setUserMode,setCloudServer,extensionPairCode,forceLocalMode,resetMode,clearModePreference,readModePreference,probeCloud,loadConfig,dataDir,readDesktopSession,writeDesktopSession,syncBridgeFromSession,LOCAL_ORIGIN,ORIGIN:LOCAL_ORIGIN,DEFAULT_CLOUD};

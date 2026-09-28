@@ -2,7 +2,10 @@ package api
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"sort"
 	"strconv"
@@ -37,7 +40,7 @@ func (s *Server) loadDashboard(ctx context.Context, uid string) (map[string]any,
 		)
 		LEFT JOIN quota_buckets b ON b.provider_account_id = a.id
 		LEFT JOIN usage_snapshots s ON s.id = (
-			SELECT id FROM usage_snapshots WHERE quota_bucket_id = b.id ORDER BY observed_at DESC LIMIT 1
+			SELECT id FROM usage_snapshots WHERE quota_bucket_id = b.id ORDER BY ingest_order DESC LIMIT 1
 		)
 		WHERE a.user_id = $1
 		ORDER BY a.created_at DESC, b.created_at ASC
@@ -73,7 +76,7 @@ func (s *Server) loadDashboard(ctx context.Context, uid string) (map[string]any,
 			breset, bexp, bsrc, conf                sql.NullString
 			limit                                   sql.NullFloat64
 			remain, ratio, used                     sql.NullFloat64
-			obs, note, ssrc, snapRaw                 sql.NullString
+			obs, note, ssrc, snapRaw                sql.NullString
 		)
 		if err := rows.Scan(
 			&aid, &aname, &hint, &region, &astatus, &aupd,
@@ -112,12 +115,31 @@ func (s *Server) loadDashboard(ctx context.Context, uid string) (map[string]any,
 		if !bid.Valid {
 			continue
 		}
+		limitValue, resetValue, expiryValue := nullF64(limit), nullTime(breset), nullTime(bexp)
+		if (ssrc.String == "user_manual" || ssrc.String == "file_import") && snapRaw.Valid {
+			var manual struct {
+				Limit  *float64 `json:"limit_value"`
+				Reset  string   `json:"reset_at"`
+				Expiry string   `json:"expires_at"`
+			}
+			if json.Unmarshal([]byte(snapRaw.String), &manual) == nil {
+				if manual.Limit != nil {
+					limitValue = manual.Limit
+				}
+				if v, e := parseTimePtr(manual.Reset); e == nil && v != nil {
+					resetValue = v
+				}
+				if v, e := parseTimePtr(manual.Expiry); e == nil && v != nil {
+					expiryValue = v
+				}
+			}
+		}
 		view := quota.BucketView{
-			LimitValue:     nullF64(limit),
+			LimitValue:     limitValue,
 			RemainingValue: nullF64(remain),
 			RemainingRatio: nullF64(ratio),
-			ResetAt:        nullTime(breset),
-			ExpiresAt:      nullTime(bexp),
+			ResetAt:        resetValue,
+			ExpiresAt:      expiryValue,
 			ObservedAt:     nullTime(obs),
 		}
 		st := quota.ComputeStatus(view, now)
@@ -133,23 +155,23 @@ func (s *Server) loadDashboard(ctx context.Context, uid string) (map[string]any,
 			src = nullStr(bsrc)
 		}
 		bucket := map[string]any{
-			"id":              bid.String,
-			"scope_key":       nullStr(scope),
-			"quota_type":      nullStr(qtype),
-			"unit":            nullStr(unit),
-			"limit_value":     f64Out(nullF64(limit)),
-			"remaining_value": f64Out(nullF64(remain)),
-			"remaining_ratio": f64Out(nullF64(ratio)),
-			"used_value":      f64Out(nullF64(used)),
-			"reset_policy":    nullStr(policy),
-			"reset_at":        timeOut(nullTime(breset)),
-			"expires_at":      timeOut(nullTime(bexp)),
-			"source_type":     src,
-			"confidence":      nullStr(conf),
-			"observed_at":     timeOut(nullTime(obs)),
-			"note":               nullStr(note),
-			"collection_status":  collectionStatus,
-			"status":             st,
+			"id":                bid.String,
+			"scope_key":         nullStr(scope),
+			"quota_type":        nullStr(qtype),
+			"unit":              nullStr(unit),
+			"limit_value":       f64Out(limitValue),
+			"remaining_value":   f64Out(nullF64(remain)),
+			"remaining_ratio":   f64Out(nullF64(ratio)),
+			"used_value":        f64Out(nullF64(used)),
+			"reset_policy":      nullStr(policy),
+			"reset_at":          timeOut(resetValue),
+			"expires_at":        timeOut(expiryValue),
+			"source_type":       src,
+			"confidence":        nullStr(conf),
+			"observed_at":       timeOut(nullTime(obs)),
+			"note":              nullStr(note),
+			"collection_status": collectionStatus,
+			"status":            st,
 		}
 		item.data["buckets"] = append(item.data["buckets"].([]map[string]any), bucket)
 	}
@@ -184,6 +206,8 @@ func (s *Server) loadDashboard(ctx context.Context, uid string) (map[string]any,
 
 func (s *Server) manualSnapshot(w http.ResponseWriter, r *http.Request) {
 	var req struct {
+		OperationID    string   `json:"operation_id"`
+		SourceType     string   `json:"source_type"`
 		RemainingValue *float64 `json:"remaining_value"`
 		RemainingRatio *float64 `json:"remaining_ratio"`
 		UsedValue      *float64 `json:"used_value"`
@@ -195,6 +219,17 @@ func (s *Server) manualSnapshot(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := httpx.Decode(r, &req); err != nil {
 		httpx.Error(w, http.StatusBadRequest, "invalid_json", "请求格式不正确")
+		return
+	}
+	if req.SourceType == "" {
+		req.SourceType = "user_manual"
+	}
+	if req.SourceType != "user_manual" && req.SourceType != "file_import" {
+		httpx.Error(w, http.StatusBadRequest, "invalid_input", "无效的录入来源")
+		return
+	}
+	if !quotaNumber(req.RemainingValue, 1e15) || !quotaNumber(req.UsedValue, 1e15) || !quotaNumber(req.LimitValue, 1e15) || !quotaNumber(req.RemainingRatio, 1) || len(req.Note) > 300 {
+		httpx.Error(w, http.StatusBadRequest, "invalid_quota", "额度数值或备注无效")
 		return
 	}
 	bucketID := r.PathValue("id")
@@ -226,14 +261,39 @@ func (s *Server) manualSnapshot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer func() { _ = tx.Rollback() }()
+	if req.OperationID != "" {
+		if len(req.OperationID) > 128 {
+			httpx.Error(w, http.StatusBadRequest, "invalid_input", "操作标识过长")
+			return
+		}
+		serialized, _ := json.Marshal(req)
+		hash := fmt.Sprintf("%x", sha256.Sum256(serialized))
+		var storedBucket, storedHash string
+		err = tx.QueryRowContext(ctx, `INSERT INTO manual_snapshot_operations (user_id, operation_id, quota_bucket_id, request_hash)
+			VALUES ($1,$2,$3,$4) ON CONFLICT (user_id, operation_id) DO UPDATE SET operation_id = EXCLUDED.operation_id
+			RETURNING quota_bucket_id, request_hash`, uid, req.OperationID, bucketID, hash).Scan(&storedBucket, &storedHash)
+		if err != nil {
+			httpx.Error(w, http.StatusInternalServerError, "internal", "无法记录操作")
+			return
+		}
+		if storedBucket != bucketID || storedHash != hash {
+			httpx.Error(w, http.StatusConflict, "operation_conflict", "操作标识已用于其他修改")
+			return
+		}
+		var count int
+		_ = tx.QueryRowContext(ctx, `SELECT count(*) FROM usage_snapshots WHERE quota_bucket_id=$1 AND raw_value_json::jsonb ->> 'operation_id' = $2`, bucketID, req.OperationID).Scan(&count)
+		if count > 0 {
+			httpx.WriteJSON(w, http.StatusOK, map[string]any{"ok": true, "replayed": true})
+			return
+		}
+	}
 	if req.LimitValue != nil || resetAt != nil || expiresAt != nil {
 		_, err = tx.ExecContext(ctx, `UPDATE quota_buckets SET
 			limit_value = COALESCE($1, limit_value),
 			reset_at = COALESCE($2, reset_at),
 			expires_at = COALESCE($3, expires_at),
-			source_type = 'user_manual',
 			updated_at = $4
-			WHERE id = $5`, argF64(req.LimitValue), argTime(resetAt), argTime(expiresAt), now.Format(time.RFC3339), bucketID)
+			WHERE id = $5 AND source_type = 'user_manual'`, argF64(req.LimitValue), argTime(resetAt), argTime(expiresAt), now.Format(time.RFC3339), bucketID)
 		if err != nil {
 			httpx.Error(w, http.StatusInternalServerError, "internal", "更新额度失败")
 			return
@@ -243,11 +303,16 @@ func (s *Server) manualSnapshot(w http.ResponseWriter, r *http.Request) {
 	_ = tx.QueryRowContext(ctx, `SELECT limit_value FROM quota_buckets WHERE id = $1`, bucketID).Scan(&limit)
 	ratio := req.RemainingRatio
 	if ratio == nil {
-		ratio = quota.RemainingRatio(nullF64(limit), req.RemainingValue, nil)
+		effectiveLimit := req.LimitValue
+		if effectiveLimit == nil {
+			effectiveLimit = nullF64(limit)
+		}
+		ratio = quota.RemainingRatio(effectiveLimit, req.RemainingValue, nil)
 	}
+	raw, _ := json.Marshal(map[string]any{"operation_id": req.OperationID, "limit_value": req.LimitValue, "reset_at": req.ResetAt, "expires_at": req.ExpiresAt})
 	_, err = tx.ExecContext(ctx, `INSERT INTO usage_snapshots (id, quota_bucket_id, observed_at, used_value, remaining_value, remaining_ratio, note, raw_value_json, source_type, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, '{}', 'user_manual', $8)`,
-		httpx.NewID("snap"), bucketID, obs.Format(time.RFC3339), argF64(req.UsedValue), argF64(req.RemainingValue), argF64(ratio), req.Note, now.Format(time.RFC3339))
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+		httpx.NewID("snap"), bucketID, obs.Format(time.RFC3339), argF64(req.UsedValue), argF64(req.RemainingValue), argF64(ratio), req.Note, string(raw), req.SourceType, now.Format(time.RFC3339))
 	if err != nil {
 		logErr("insert snapshot", err, httpx.RequestID(r))
 		httpx.Error(w, http.StatusInternalServerError, "internal", "写入快照失败")

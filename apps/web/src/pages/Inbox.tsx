@@ -72,8 +72,8 @@ export default function Inbox() {
                   </td>
                   <td>
                     {n.status === "unread" ? (
-                      <button className="btn ghost" onClick={async () => { await api.readNotification(n.id); await load(); }}>标为已读</button>
-                    ) : "已读"}
+                      <span className="actions"><button className="btn ghost" onClick={async () => { await api.notificationAction(n.id,"read"); await load(); }}>已读</button><button className="btn ghost" onClick={async () => { await api.notificationAction(n.id,"snooze"); await load(); }}>稍后</button><button className="btn ghost" onClick={async () => { await api.notificationAction(n.id,"dismiss"); await load(); }}>忽略</button></span>
+                    ) : n.status === "snoozed" ? "稍后提醒" : n.status === "dismissed" ? "已忽略" : "已读"}
                   </td>
                 </tr>
               ))}

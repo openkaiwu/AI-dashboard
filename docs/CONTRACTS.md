@@ -19,9 +19,10 @@ The reproducible boundary check examines module imports, auth/sync table ownersh
 
 ## Auth and device lifecycle
 
-POST /api/v1/auth/register or /login: {email,password,device_name}.
-Returns {token,refresh_token,expires_at,device_id,user:{id,email}}.
-Each login creates a new device. Passwords: bcrypt cost 10, 8–72 UTF-8 bytes.
+POST /api/v1/auth/register 始终返回 403。首个管理员通过 `aihub-admin` 初始化，其后由管理员创建/启用账户。
+POST /api/v1/auth/login: {email,password,device_name,device_kind,installation_id}，device_kind 为 desktop/mobile/web_admin。
+Returns {token,refresh_token,expires_at,device_id,user:{id,email,role}}.
+同一安装重复登录复用设备绑定；每账户 desktop/mobile 各限一台，换设备需要管理员解绑。Web 管理会话不占名额且只能访问管理 API。Passwords: bcrypt cost 10, 8–72 UTF-8 bytes.
 Access: 192 random bits, 15 minutes. Refresh: independently random, 30 days.
 Database stores only SHA-256 token hashes. Provider credentials are unrelated and never accepted here.
 
@@ -30,8 +31,8 @@ Old access is invalid after rotation. Used refresh hashes remain as replay detec
 Reusing a consumed refresh revokes that device, including its newer sessions; other devices are unaffected.
 A lost refresh response may require fresh login; never silently weaken replay protection.
 
-GET /api/v1/devices; DELETE /api/v1/devices/{id}; POST /api/v1/auth/logout.
-Revocation is scoped to the authenticated owner. Logout revokes the current device.
+GET /api/v1/devices; POST /api/v1/auth/logout。普通用户不得解绑；管理员使用 `/api/v1/admin/users/{id}/devices/{device}` 解绑。
+Logout consumes the current session and clears local sensitive cache; device binding remains until admin unbinds it.
 Every protected request checks persistence; sync writes also lock the device row inside the transaction.
 Requests already in flight may finish before a revocation commits. No new request after the revoke commit is accepted.
 Audit contains user/device IDs and action names, not credentials, note payloads or passwords.
@@ -41,11 +42,11 @@ Authentication endpoints use a bounded in-memory IP throttle; reverse proxies sh
 | --- | --- |
 | stolen access | short lifetime; owner can revoke the device immediately |
 | stolen refresh/replay | token rotation; reuse revokes the device family |
-| lost phone | revoke from another device; cannot remotely erase already cached offline data |
+| lost phone | administrator unbinds the device; cannot remotely erase already cached offline data |
 | server URL spoof/redirect | HTTPS and normal certificate verification; no userinfo/path/query in Server Profile; HTTP redirects refused |
-| cross-profile credentials | vault/session keyed by profile; changing URL clears its session; cache keyed by origin and user |
+| cross-profile credentials | vault/session keyed by profile; changing URL clears its session; cache keyed by origin, user and device |
 | revoked session | queue retained; automatic network retry stops until fresh login |
-| XSS | React escaped text, no HTML injection, same-origin deployment; Web system tokens live in origin localStorage and remain exposed to origin compromise |
+| XSS | React escaped text, no HTML injection, same-origin deployment; desktop secrets use OS safe storage, browser admin session uses sessionStorage |
 | native credential storage | Flutter secure storage; SQLite contains no access/refresh tokens |
 
 ## Sync wire v1

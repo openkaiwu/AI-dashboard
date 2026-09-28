@@ -9,7 +9,7 @@ type Advice={kind:string;title:string;body:string;priority:number};
 type Metric={bucket:string;slot:string;remaining:number;hours_left:number|null;rate_per_hour:number|null;daily_budget:number|null;resets_at:number|null;duration_minutes:number};
 type Device={id:string;name:string;snapshot:any;history:any[];analysis:{state:string;metrics:Metric[];advice:Advice[]}};
 type Alert={id:string;advice:Advice;first_seen:string;notified_at:string;dismissed:boolean;snoozed_until:string|null};
-type Overview={generated_at:string;preferences:Pref;quiet:boolean;devices:Device[];alerts:Alert[]};
+type Overview={generated_at:string;preferences:Pref;quiet:boolean;devices:Device[];alerts:Alert[];plan?:{plan_type:'plus'|'pro'|'unknown';source_type:string}};
 const when=(v:string|number|null)=>v==null?'未知':new Date(typeof v==='number'?v*1000:v).toLocaleString();
 const hours=(v:number|null)=>v==null?'时间未知':v<=0?'等待重置确认':v>=24?`${(v/24).toFixed(1)} 天`:`${v.toFixed(1)} 小时`;
 const labels:Record<string,string>={slow:'建议放慢',use:'适合多用',balanced:'节奏平稳',stale:'等待新数据',unknown:'信息不足'};
@@ -39,6 +39,7 @@ export default function CodexOverview(){
  async function notify(){if(!('Notification'in window)){setMessage('此浏览器不支持系统通知，请使用站内提醒。');return;}if(desktop){localStorage.setItem(key+':notify','off');setDesktop(false);return;}if(await Notification.requestPermission()==='granted'){localStorage.setItem(key+':notify','on');setDesktop(true);}else setMessage('未获得通知权限；站内提醒继续显示。');}
  async function action(id:string,action:string){try{await request('/api/v1/codex/alerts/'+encodeURIComponent(id),{method:'POST',body:JSON.stringify({action})});await reload();}catch{setMessage('暂时无法更新提醒，请稍后重试。');}}
  async function save(){if(!editing)return;setSaving(true);try{await request('/api/v1/codex/preferences',{method:'PATCH',body:JSON.stringify(editing)});setEditing(null);setMessage('规则已保存，并同步到此账户。');await reload();}catch(e){setMessage(String(e));}finally{setSaving(false);}}
+ async function savePlan(plan_type:string){try{await request('/api/v1/codex/plan',{method:'PUT',body:JSON.stringify({plan_type})});await reload();setMessage('套餐设置已保存；额度和提醒已重新计算。');}catch(e){setMessage(String(e));}}
  const d=data?.devices.find(x=>x.id===selected)||data?.devices[0];const stale=!!error||!d||clock-new Date(d.snapshot.observed_at).getTime()>CODEX_STALE_MS;const state=stale?'stale':d.analysis.state;
  const credits=d?.snapshot.reset_credits,news=d?.snapshot.news,p=editing||data?.preferences;
  const pending=(data?.alerts||[]).filter(a=>!a.dismissed&&(!a.snoozed_until||new Date(a.snoozed_until).getTime()<=clock));
@@ -54,6 +55,8 @@ export default function CodexOverview(){
  return <section className="advisor"><header className="advisor-header"><div><p className="eyebrow">CODEX / PERSONAL COMPANION</p><h1>{({overview:'让额度跟上你的节奏',plan:'把剩余额度安排好',reminders:'把重要提醒处理好',news:'关注重置的最新动向',settings:'按你的习惯提醒'} as Record<string,string>)[tab]}</h1><p className="lead">{({overview:'什么时候多用一点，什么时候留一点，一眼就知道。',plan:'预留、分配、复盘，让下一次重置之前的工作更从容。',reminders:'集中处理额度、节奏和到期提醒，稍后提醒与忽略随时可恢复。',news:'查看 Tibo 原帖和最近检查结果，账户变化以实际采集为准。',settings:'统一管理规则阈值、免打扰时间和此设备的通知权限。'} as Record<string,string>)[tab]}</p></div><div className="advisor-tools">{data&&data.devices.length>1&&<select aria-label="分析哪台电脑" value={d?.id} onChange={e=>setSelected(e.target.value)}>{data.devices.map(x=><option key={x.id} value={x.id}>{x.name}</option>)}</select>}<button className="btn secondary" onClick={()=>void reload()}>↻ 刷新</button></div></header>
  <div className="advisor-status"><span className={'status-dot'+(stale?' offline':'')}/><span>{stale?'等待电脑新数据':d?.name+' · 已同步'}</span><span>{d?.snapshot?.observed_at?when(d.snapshot.observed_at):'尚未采集'}</span><Link to="/connections">管理连接 ↗</Link></div>
  {error&&<p className="error" role="status">{error}</p>}{message&&<p className="sync-banner" role="status">{message}<button className="btn ghost" onClick={()=>setMessage('')}>关闭</button></p>}
+ {data?.plan?.plan_type==='unknown'&&<p className="sync-banner">Codex 套餐尚未确认。请选择 Plus 或 Pro，以正确显示五小时额度。</p>}
+ <label className="field"><span>Codex 套餐 · {data?.plan?.source_type==='manual'?'手动设置':'采集识别'}</span><select value={data?.plan?.plan_type||'unknown'} onChange={e=>void savePlan(e.target.value)}><option value="unknown">未知</option><option value="plus">Plus · 显示五小时额度</option><option value="pro">Pro · 隐藏五小时额度及提醒</option></select></label>
  <nav className="workspace-tabs" aria-label="Codex 功能标签">{tabs.map(([id,label])=><Link key={id} to={'/codex?tab='+id} aria-current={tab===id?'page':undefined}>{label}{id==='reminders'&&pending.length>0&&<span>{pending.length}</span>}</Link>)}</nav>
  {tab==='plan'&&<CodexPlanner device={d} stale={stale||state==='unknown'||state==='stale'}/>}
  {tab==='overview'&&(!data?.devices.length?<div className="empty-notes"><h2>先连接电脑上的 Codex</h2><p>真实额度到达后，自动生成节奏建议和到期提醒。</p><Link className="btn" to="/connections">连接电脑 ↗</Link></div>:<>

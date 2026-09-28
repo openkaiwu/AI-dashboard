@@ -90,11 +90,13 @@ class HubApi implements Transport {
   }
 
   Future<void> signIn(
-      String email, String password, String name, bool register) async {
+      String email, String password, String name, String installationId,
+      {String kind = 'mobile'}) async {
     final result = await raw(
         'POST',
-        '/api/v1/auth/${register ? 'register' : 'login'}',
-        {'email': email, 'password': password, 'device_name': name});
+        '/api/v1/auth/login',
+        {'email': email, 'password': password, 'device_name': name,
+         'device_kind': kind, 'installation_id': installationId});
     await persist(result);
     session = result;
   }

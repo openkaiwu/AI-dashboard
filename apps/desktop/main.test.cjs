@@ -10,8 +10,8 @@ test('native bridge validates sender, serializes dialogs and maps safe actions',
   removeMenu(){} setIcon(){} show(){} restore(){} focus(){} flashFrame(){} async loadURL(){}
  }
  const runtime={ensureReady:async()=>{},stopManaged(){},startupMessage(){return ''},getUiOrigin:()=>'http://127.0.0.1:8080',getActiveMode:()=>'local',setUserMode(){},forceLocalMode(){},resetMode(){},clearModePreference(){},readModePreference:()=>null,probeCloud:async()=>true,loadConfig:()=>({uiMode:'local',profileId:'local-default',profileName:'本地'}),dataDir:()=>'',injectWebSession:async()=>false,syncBridgeFromSession:async()=>{},DEFAULT_CLOUD:'https://hub.example.com',ORIGIN:'http://127.0.0.1:8080'};
- const electron={app:{requestSingleInstanceLock:()=>true,on(){},whenReady:()=>Promise.resolve(),setAppUserModelId(){},commandLine:{appendSwitch(){}}},BrowserWindow:Window,Tray:class{setToolTip(){}setContextMenu(){}on(){}},Menu:{buildFromTemplate:x=>x},nativeImage:{createFromPath:()=>({})},ipcMain:{handle:(k,v)=>handlers[k]=v},dialog:{showMessageBox:async()=>{openCount++;return {response:answer};}},shell:{openExternal:async url=>{assert.equal(url,'codex://');}}};
- vm.runInNewContext(fs.readFileSync(__dirname+'/main.cjs','utf8'),{require:name=>name==='electron'?electron:name==='./runtime.cjs'?runtime:require(name),__dirname,URL});
+ const electron={app:{requestSingleInstanceLock:()=>true,on(){},whenReady:()=>Promise.resolve(),setAppUserModelId(){},commandLine:{appendSwitch(){}}},BrowserWindow:Window,Tray:class{setToolTip(){}setContextMenu(){}on(){}},Menu:{buildFromTemplate:x=>x},nativeImage:{createFromPath:()=>({})},ipcMain:{handle:(k,v)=>handlers[k]=v,on:(k,v)=>handlers[k]=v},dialog:{showMessageBox:async()=>{openCount++;return {response:answer};}},shell:{openExternal:async url=>{assert.equal(url,'codex://');}}};
+ vm.runInNewContext(fs.readFileSync(__dirname+'/main.cjs','utf8'),{require:name=>name==='electron'?electron:name==='./runtime.cjs'?runtime:require(name),__dirname,URL,setInterval:()=>({unref(){}}),setImmediate});
  await new Promise(r=>setImmediate(r));
  openCount=0;
  const e={sender:window.webContents,senderFrame:window.webContents.mainFrame};

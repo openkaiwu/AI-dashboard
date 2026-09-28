@@ -3,6 +3,8 @@ import { useNavigate, useParams } from "react-router-dom";
 import { Account, Snapshot, api } from "../api";
 import { fmtTime, remainText, sourceLabel, statusLabel } from "./Dashboard";
 import { toRFC } from "./AccountNew";
+import { enqueueAccountPatch, enqueueManual, pendingManualCount } from "../manualQueue";
+import FileImport from "./FileImport";
 
 export default function AccountDetail() {
   const { id } = useParams();
@@ -16,11 +18,19 @@ export default function AccountDetail() {
   const [limit, setLimit] = useState("");
   const [resetAt, setResetAt] = useState("");
   const [expiresAt, setExpiresAt] = useState("");
+  const [pending, setPending] = useState(0);
+  const [displayName, setDisplayName] = useState("");
+  const [region, setRegion] = useState("");
+  const [planName, setPlanName] = useState("");
 
   async function load() {
     if (!id) return;
     const a = await api.getAccount(id);
     setAccount(a);
+    setDisplayName(a.display_name);
+    setRegion(a.region || "");
+    setPlanName(a.plan_name || "");
+    setPending(await pendingManualCount());
     const b = a.buckets[0];
     if (b) {
       const hist = await api.snapshots(b.id, days);
@@ -39,17 +49,36 @@ export default function AccountDetail() {
     const b = account?.buckets[0];
     if (!b) return;
     try {
-      await api.manualSnapshot(b.id, {
+      await enqueueManual(b.id, {
         remaining_value: remaining === "" ? null : Number(remaining),
         limit_value: limit === "" ? null : Number(limit),
         reset_at: toRFC(resetAt),
         expires_at: toRFC(expiresAt),
         note,
       });
+      setPending(await pendingManualCount());
       setNote("");
-      await load();
+      if (await pendingManualCount() === 0) await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : "刷新失败");
+    }
+  }
+
+  async function onSaveAccount(e: FormEvent) {
+    e.preventDefault();
+    if (!account) return;
+    setError("");
+    try {
+      await enqueueAccountPatch(account.id, {
+        display_name: displayName,
+        region,
+        plan_name: planName === account.plan_name ? "" : planName,
+      });
+      setPending(await pendingManualCount());
+      if (await pendingManualCount() === 0) await load();
+    } catch (err) {
+      setPending(await pendingManualCount());
+      setError(err instanceof Error ? err.message : "保存失败");
     }
   }
 
@@ -76,12 +105,24 @@ export default function AccountDetail() {
         </div>
       </div>
       {error ? <p className="error">{error}</p> : null}
+      {pending > 0 && <p className="sync-banner">有 {pending} 条账户或额度修改待联网同步；相同操作会安全重试。</p>}
       {b?.collection_status === "stale" && (
         <div className="sync-banner">采集暂时失败，显示的是上次成功快照；不会据此推断额度耗尽。</div>
       )}
       {(b?.collection_status === "unavailable" || b?.collection_status === "unknown") && (
         <div className="sync-banner">当前 Cursor 额度不可用，请检查电脑登录与 bridge 采集。</div>
       )}
+
+      <form className="panel" onSubmit={onSaveAccount}>
+        <h2>账户维护</h2>
+        <div className="row">
+          <label className="field"><span>显示名称</span><input required maxLength={120} value={displayName} onChange={(e) => setDisplayName(e.target.value)} /></label>
+          <label className="field"><span>地区</span><input maxLength={40} value={region} onChange={(e) => setRegion(e.target.value)} /></label>
+        </div>
+        <label className="field"><span>套餐名称</span><input maxLength={120} value={planName} onChange={(e) => setPlanName(e.target.value)} /></label>
+        <p className="meta">自动采集的套餐只读；手工套餐可编辑。断网修改会在恢复连接后同步。</p>
+        <button className="btn">保存账户</button>
+      </form>
 
       <div className="panel">
         <h2>当前快照</h2>
@@ -102,7 +143,7 @@ export default function AccountDetail() {
           <button className="btn secondary" onClick={() => setDays(7)}>7 天</button>
           <button className="btn secondary" onClick={() => setDays(30)}>30 天</button>
         </div>
-        <Sparkline points={snaps.map((s) => s.remaining_ratio ?? 0)} />
+        <Sparkline points={snaps.map((s) => s.remaining_ratio).filter((n): n is number => n != null)} />
         <table className="table">
           <thead><tr><th>时间</th><th>剩余</th><th>比例</th><th>来源</th><th>备注</th></tr></thead>
           <tbody>
@@ -134,6 +175,7 @@ export default function AccountDetail() {
           <button className="btn">写入快照并重新求值</button>
         </form>
       ) : null}
+      {b && <FileImport bucketId={b.id} onComplete={load} />}
     </>
   );
 }

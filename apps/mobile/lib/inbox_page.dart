@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'api.dart';
+import 'store.dart';
 import 'theme.dart';
 
 class InboxPage extends StatefulWidget {
@@ -84,6 +85,10 @@ class _InboxPageState extends State<InboxPage> {
       if (mounted) setState(() => error = '暂时无法标记已读');
     }
   }
+  Future<void> act(String id,String action) async {
+    try { await widget.api.call('POST','/api/v1/notifications/${Uri.encodeComponent(id)}/action',{'action':action}); await refresh(); }
+    catch (_) { if(mounted) setState(()=>error='暂时无法处理提醒'); }
+  }
 
   String when(dynamic value) => value == null
       ? '—'
@@ -133,11 +138,8 @@ class _InboxPageState extends State<InboxPage> {
                     ],
                   ),
                   trailing: n['status'] == 'unread'
-                      ? TextButton(
-                          onPressed: () => readOne(n['id'] as String),
-                          child: const Text('已读'),
-                        )
-                      : const Text('已读', style: TextStyle(color: HubTheme.muted)),
+                      ? PopupMenuButton<String>(onSelected:(action)=>act(n['id'] as String,action),itemBuilder:(_)=>const [PopupMenuItem(value:'read',child:Text('已读')),PopupMenuItem(value:'snooze',child:Text('一小时后提醒')),PopupMenuItem(value:'dismiss',child:Text('忽略本次'))])
+                      : Text(n['status']=='snoozed'?'稍后提醒':n['status']=='dismissed'?'已忽略':'已读',style: const TextStyle(color: HubTheme.muted)),
                   onTap: () {
                     final slug = n['provider_slug'] as String?;
                     if (slug == 'cursor' || slug == 'codex') {

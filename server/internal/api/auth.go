@@ -10,18 +10,20 @@ import (
 )
 
 func (s *Server) me(w http.ResponseWriter, r *http.Request) {
-	var email, created string
-	err := s.db.QueryRowContext(r.Context(), `SELECT email, created_at FROM users WHERE id = $1`, userID(r)).Scan(&email, &created)
+	var email, created, role, status string
+	err := s.db.QueryRowContext(r.Context(), `SELECT email, created_at, role, account_status FROM users WHERE id = $1`, userID(r)).Scan(&email, &created, &role, &status)
 	if err != nil {
 		httpx.Error(w, http.StatusInternalServerError, "internal", "读取用户失败")
 		return
 	}
 	var unread int
-	_ = s.db.QueryRowContext(r.Context(), `SELECT COUNT(*) FROM notifications WHERE user_id = $1 AND status = 'unread'`, userID(r)).Scan(&unread)
+	_ = s.db.QueryRowContext(r.Context(), `SELECT COUNT(*) FROM notifications WHERE user_id = $1 AND (status = 'unread' OR (status='snoozed' AND snoozed_until<=now()))`, userID(r)).Scan(&unread)
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{
 		"id":           userID(r),
 		"email":        email,
 		"created_at":   created,
+		"role":         role,
+		"status":       status,
 		"unread_count": unread,
 	})
 }

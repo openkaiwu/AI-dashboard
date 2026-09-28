@@ -8,8 +8,7 @@
 powershell -ExecutionPolicy Bypass -File scripts/Start-Local.ps1
 ~~~
 
-打开 http://127.0.0.1:8080 。本地演示账户 demo@aihub.local / demo1234。
-也可注册独立账户。演示数据为手工 fixture，不是真实 Provider 额度。
+打开 http://127.0.0.1:8080 。首次使用需运行 `aihub-admin` 初始化管理员，再在管理台授权普通账户；没有预置生产账户或公开注册。
 本地数据库是 WSL PostgreSQL；凭据仅在 .runtime/server.env，不进入包。
 
 完整本地 Gate：
@@ -39,7 +38,15 @@ $env:AIHUB_ADDR = '127.0.0.1:8080'
 .\aihub-windows-amd64.exe
 ~~~
 
-默认不开启演示账户。仅本地试用时设置 AIHUB_DEMO=true。
+默认不开启演示账户。运行包包含 `aihub-admin-linux-amd64` / `aihub-admin-windows-amd64.exe`；设置同一个 `AIHUB_DATABASE_URL`，传入 `--email`，从标准输入读取密码。初始化只能执行一次。旧账户迁移后为待管理员确认，设备需重新绑定。
+
+Linux 服务器初始化示例（在服务器终端执行，密码输入不回显）：
+
+~~~bash
+sudo bash -c 'set -a; . /etc/aihub.env; read -r -s -p "管理员密码: " pwd </dev/tty; printf "\n" >/dev/tty; printf "%s\n" "$pwd" | /opt/aihub/aihub-admin-linux-amd64 --email admin@example.com'
+~~~
+
+把示例邮箱替换为实际管理员邮箱。命令不会把密码放进参数或保存到配置文件；之后通过 Web 管理台创建/启用普通账户和解绑设备。
 数据库错误不打印连接串。/health 是存活检查，/ready 检查数据库。
 systemd 示例见 deploy/aihub.service；AIHUB_DATABASE_URL 放 /etc/aihub.env，限制文件权限。
 PostgreSQL 不在同机/隔离网络时使用 sslmode=verify-full 并配置信任证书。
@@ -55,7 +62,7 @@ docker compose --env-file deploy/.env -f deploy/compose.yaml up -d --build
 ~~~
 
 Caddy 自动签发证书。只发布 Caddy 的 80/443，不发布 PostgreSQL 或 app 端口。
-公网禁止启用演示账户。首次注册后可通过反向代理限制注册路由。
+公网禁止启用演示账户。公开注册路由始终返回 403；管理员通过本机命令初始化后，在 Web 管理台创建账户。
 如不用 Docker，把 Caddyfile 的 reverse_proxy 改为 127.0.0.1:8080，并配置你的域名。
 
 两端打开同一 HTTPS 地址或在 Flutter 中添加同一 Server Profile，登录同一账户即可。

@@ -10,21 +10,21 @@ powershell -ExecutionPolicy Bypass -File scripts/Install-AIHub.ps1
 
 或手动运行 `artifacts/desktop/installer/AIHub-Setup-0.3.3.exe`。安装后双击 **AI Hub** 即可：
 
-1. **启动选择（0.3.3 默认）**：首次打开弹出对话框 — **登录服务器**（连接 `https://hub.example.com`）或 **离线本地模式**（本机 `http://127.0.0.1:8080` + WSL/PostgreSQL）。可选「记住选择」
-2. **登录服务器**：云端可达时用 `bootstrap.json` 自动登录；连接失败时可重试、改离线或退出
-3. **离线本地**：仅本机演示数据，不依赖公网
-4. **托盘 → 切换使用方式**：清除记忆并重新选择
-5. 强制默认：在 `%APPDATA%\AI Hub\runtime\app-config.json` 设置 `"uiMode":"ask"` / `"cloud"` / `"local"`
+1. 首次选择「登录服务器」后填写管理员提供的 HTTPS 根地址；选择本地开发模式需要 WSL、PostgreSQL 和已初始化的管理员。
+2. 用管理员授权的账户登录。该安装绑定为桌面设备；再次启动恢复有效会话并自动连接 Bridge。
+3. 关闭窗口保留托盘和采集。托盘可打开、重连、切换使用方式和明确退出；退出会停止本应用管理的进程。本轮不配置开机自启。
+4. 连接失败时提示重试或修改地址，不会自动切到另一个本地账户。
 
 配置与日志保存在 `%APPDATA%/AI Hub/runtime/`：
 
 | 文件 | 作用 |
 |------|------|
-| `bootstrap.json` | 云端账户自动登录 + 自动创建 bridge（从 `scripts/bootstrap.example.json` 复制） |
-| `bridge.json` | Codex 采集器配置（安装时从开发目录 `.runtime` 自动迁移） |
+| `sessions.protected` | 由操作系统安全存储加密的会话 |
+| `bridge-token.protected` | 由操作系统安全存储加密的上报凭据 |
+| `bridge.json` | 不含令牌的 Codex/Cursor 采集器配置 |
 | `app-config.json` | 覆盖默认云端/本地模式 |
 
-安装脚本会把项目 `.runtime/` 中的配置复制到上述目录，无需手填 token。
+桌面端不从开发目录复制账户凭据或数据库配置。Bridge 会在登录后自动配对，并受该桌面设备的解绑和禁用操作约束。
 
 **便携版** — 解压 `artifacts/aihub-desktop-windows-x64.zip` 后仍可用，但需自行运行 `scripts/Start-AIHub.ps1` 启动本地服务。
 
@@ -39,12 +39,11 @@ powershell -ExecutionPolicy Bypass -File scripts/Install-AIHub.ps1
 
 ### Codex 采集器
 
-安装版首次运行会在用户目录生成 `bridge.json` 模板（默认公网服务器 `https://hub.example.com`）。在应用内「电脑采集器」创建连接并复制 token 后，编辑 `%APPDATA%/AI Hub/runtime/bridge.json` 填入 token，再点托盘「重新连接服务」。若本机已安装 Codex CLI，程序会自动查找 `codex.exe` 路径。
+安装版在已绑定的桌面会话登录后自动创建连接。若本机已安装 Codex CLI，程序会自动查找 `codex.exe`；即使未找到 Codex，Cursor 采集仍可运行。浏览器扩展固定样本 PoC 的配对码在应用内 Cursor 连接页查看。
 
 ## 前置条件
 
-- 已安装 **WSL** 与 **PostgreSQL 14**（与开发环境相同）。安装版不包含数据库，首次启动会在 WSL 内创建 `aihub_m0` 数据库与用户。
-- 未安装 WSL/PostgreSQL 时，应用会显示连接失败页，可按提示安装后点击「重新连接服务」。
+- 连接已有 HTTPS 服务器无需本机 WSL 或 PostgreSQL。本地开发模式需要 **WSL** 与 **PostgreSQL 14**，并由管理员初始化账户。
 
 ## 关于停止任务
 

@@ -24,6 +24,7 @@ export default function CursorConnections() {
   const [busy, setBusy] = useState(false);
   const [token, setToken] = useState("");
   const [tick, setTick] = useState(Date.now());
+  const [pairCode,setPairCode] = useState("");
 
   async function reload() {
     try {
@@ -158,6 +159,7 @@ export default function CursorConnections() {
           </p>
         </div>
       )}
+      {window.aihubDesktop && <div className="panel"><h2>浏览器扩展 · 固定页面样本</h2><p className="muted">本轮仅验证固定样本页的数值提取。样本不会计入真实额度；首次使用在扩展中为站点授权。</p><button className="btn secondary" onClick={()=>void window.aihubDesktop?.extensionPairCode().then(setPairCode)}>显示本机配对码</button>{pairCode&&<p className="mono">{pairCode}</p>}</div>}
       <div className="panel" style={{ marginTop: 24 }}>
         <h2>添加电脑连接</h2>
         <p className="muted">与 Codex 共用同一 bridge 令牌；配置中启用 cursor_enabled 即可同时采集。</p>

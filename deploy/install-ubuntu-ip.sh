@@ -30,6 +30,7 @@ unzip -tq "$archive" >/dev/null
 id aihub >/dev/null 2>&1 || useradd --system --home-dir /opt/aihub --shell /usr/sbin/nologin aihub
 install -d -m 0755 /opt/aihub
 unzip -p "$archive" aihub-m0/aihub-linux-amd64 | install -m 0755 /dev/stdin /opt/aihub/aihub-linux-amd64
+unzip -p "$archive" aihub-m0/aihub-admin-linux-amd64 | install -m 0755 /dev/stdin /opt/aihub/aihub-admin-linux-amd64
 unzip -p "$archive" aihub-m0/aihub.service | install -m 0644 /dev/stdin /etc/systemd/system/aihub.service
 
 if [[ ! -e /etc/aihub.env ]]; then

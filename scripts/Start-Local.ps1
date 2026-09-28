@@ -6,7 +6,7 @@ $line = Get-Content -LiteralPath $envFile | Where-Object { $_ -match '^export AI
 if (!$line) { throw 'Missing database configuration' }
 $env:AIHUB_DATABASE_URL = $line.Substring('export AIHUB_DATABASE_URL='.Length).Trim('"')
 $env:AIHUB_ADDR = '127.0.0.1:8080'
-$env:AIHUB_DEMO = 'true'
+$env:AIHUB_DEMO = 'false'
 $binary = Join-Path $root 'artifacts/aihub-m0/aihub-windows-amd64.exe'
 if (!(Test-Path -LiteralPath $binary)) { throw '请先构建运行包。' }
 # Keep WSL alive while the native Windows server uses its local PostgreSQL.

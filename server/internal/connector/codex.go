@@ -27,9 +27,13 @@ func (s *Service) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id, token := httpx.NewID("bridge"), httpx.Token()
-	_, e := s.DB.ExecContext(r.Context(), `INSERT INTO codex_bridges(id,user_id,name,token_hash) VALUES($1,$2,$3,$4)`, id, auth.Who(r).UserID, strings.TrimSpace(q.Name), auth.Hash(token))
+	result, e := s.DB.ExecContext(r.Context(), `INSERT INTO codex_bridges(id,user_id,name,token_hash,device_id) SELECT $1,d.user_id,$2,$3,d.id FROM devices d JOIN users u ON u.id=d.user_id WHERE d.id=$4 AND d.kind='desktop' AND d.revoked_at IS NULL AND u.account_status='active'`, id, strings.TrimSpace(q.Name), auth.Hash(token), auth.Who(r).DeviceID)
 	if e != nil {
 		httpx.Error(w, 503, "unavailable", "无法创建连接")
+		return
+	}
+	if n, _ := result.RowsAffected(); n != 1 {
+		httpx.Error(w, 403, "desktop_required", "请在已绑定的桌面设备创建连接")
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
@@ -71,7 +75,7 @@ func (s *Service) Upload(w http.ResponseWriter, r *http.Request) {
 	defer tx.Rollback()
 	var id string
 	var old []byte
-	e = tx.QueryRowContext(r.Context(), `SELECT id,snapshot FROM codex_bridges WHERE token_hash=$1 AND revoked_at IS NULL FOR UPDATE`, auth.Hash(strings.TrimPrefix(header, "Bearer "))).Scan(&id, &old)
+	e = tx.QueryRowContext(r.Context(), `SELECT b.id,b.snapshot FROM codex_bridges b JOIN devices d ON d.id=b.device_id JOIN users u ON u.id=b.user_id WHERE b.token_hash=$1 AND b.revoked_at IS NULL AND d.revoked_at IS NULL AND d.kind='desktop' AND u.account_status='active' FOR UPDATE OF b`, auth.Hash(strings.TrimPrefix(header, "Bearer "))).Scan(&id, &old)
 	if errors.Is(e, sql.ErrNoRows) {
 		httpx.Error(w, 401, "bridge_revoked", "连接已撤销，请重新配对")
 		return
@@ -109,6 +113,11 @@ func (s *Service) Upload(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, 200, map[string]bool{"ok": true, "applied": applied})
 }
 func (s *Service) List(w http.ResponseWriter, r *http.Request) {
+	plan, _, pe := getPlan(r.Context(), s.DB, auth.Who(r).UserID)
+	if pe != nil {
+		httpx.Error(w, 503, "unavailable", "读取失败")
+		return
+	}
 	rows, e := s.DB.QueryContext(r.Context(), `SELECT id,name,revoked_at,received_at,snapshot FROM codex_bridges WHERE user_id=$1 ORDER BY created_at DESC`, auth.Who(r).UserID)
 	if e != nil {
 		httpx.Error(w, 503, "unavailable", "读取失败")
@@ -125,9 +134,11 @@ func (s *Service) List(w http.ResponseWriter, r *http.Request) {
 		}
 		var snapshot any
 		if len(raw) > 0 {
-			if e = json.Unmarshal(raw, &snapshot); e != nil {
+			var parsed codex.Snapshot
+			if e = json.Unmarshal(raw, &parsed); e != nil {
 				break
 			}
+			snapshot = parsed.ForPlan(plan)
 		}
 		var rv, rx any
 		if revoked.Valid {

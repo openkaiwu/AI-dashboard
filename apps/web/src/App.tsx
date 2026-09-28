@@ -2,7 +2,7 @@ import StrongReminders from "./StrongReminders";
 import { NavLink, Navigate, Outlet, Route, Routes, useNavigate } from "react-router-dom";
 import { useEffect, useState } from "react";
 import { api, getToken } from "./api";
-import { getSession, profile, saveSession } from "./session";
+import { clearScopedCaches, getSession, profile, saveSession } from "./session";
 import Login from "./pages/Login";
 import Dashboard from "./pages/Dashboard";
 import AccountNew from "./pages/AccountNew";
@@ -14,7 +14,12 @@ import Devices from "./pages/Devices";
 import Codex from "./pages/CodexOverview";
 import CodexConnections from "./pages/CodexConnections";
 import CursorConnections from "./pages/CursorConnections";
-import { ActiveProvider, bootstrapProviderMode, getActiveProvider, providerLabel, setActiveProvider } from "./providerMode";
+import Admin from "./pages/Admin";
+import ModeSelect from "./pages/ModeSelect";
+import CursorOverview from "./pages/CursorOverview";
+import { ActiveProvider, getActiveProvider, hasActiveProvider, providerLabel, setActiveProvider } from "./providerMode";
+import { flushManual, pendingManualCount, clearManualQueue } from "./manualQueue";
+import {loadState,clearSyncState} from "./sync";
 
 export default function App() {
   return (
@@ -26,6 +31,7 @@ export default function App() {
           <Route path="/notes" element={<Sync />} />
           <Route path="/connections" element={<CodexConnections />} />
           <Route path="/cursor/connections" element={<CursorConnections />} />
+          <Route path="/cursor" element={<CursorOverview />} />
           <Route path="/codex" element={<Codex />} />
           <Route path="/dashboard" element={<Dashboard />} />
           <Route path="/accounts/new" element={<AccountNew />} />
@@ -33,6 +39,8 @@ export default function App() {
           <Route path="/rules" element={<Rules />} />
           <Route path="/inbox" element={<Inbox />} />
           <Route path="/devices" element={<Devices />} />
+          <Route path="/admin" element={<Admin />} />
+          <Route path="/choose" element={<ModeSelect />} />
         </Route>
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
@@ -45,27 +53,37 @@ function RequireAuth() {
 }
 
 function HomeRedirect() {
+  if (!window.aihubDesktop && getSession()?.user.role === "admin") return <Navigate to="/admin" replace />;
+  if (!hasActiveProvider()) return <Navigate to="/choose" replace />;
   const mode = getActiveProvider();
-  return <Navigate to={mode === "cursor" ? "/dashboard" : "/codex"} replace />;
+  return <Navigate to={mode === "cursor" ? "/cursor" : "/codex"} replace />;
 }
 
 function Shell() {
   const nav = useNavigate();
   const [mode, setMode] = useState<ActiveProvider>(() => getActiveProvider());
 
+
   useEffect(() => {
     const onMode = (e: Event) => setMode((e as CustomEvent<ActiveProvider>).detail);
     window.addEventListener("aihub-provider-mode", onMode);
-    void bootstrapProviderMode(async () => {
-      const dash = await api.dashboard();
-      return dash.accounts;
-    }).then((m) => setMode(m));
     return () => window.removeEventListener("aihub-provider-mode", onMode);
   }, []);
+  useEffect(()=>{
+    const sync=()=>{if(getSession() && navigator.onLine) void flushManual().catch(()=>{});};
+    sync();window.addEventListener('online',sync);const timer=setInterval(sync,60000);
+    return()=>{window.removeEventListener('online',sync);clearInterval(timer);};
+  },[]);
 
   async function logout() {
     try {
+      const pending=await pendingManualCount();
+      const notes=(await loadState()).pending.length;
+      if((pending||notes) && !confirm(`有 ${pending} 条额度修改和 ${notes} 条便笺修改尚未同步。退出将清除本机待同步修改，确定退出？`))return;
       await api.logout();
+      await clearManualQueue();
+      await clearSyncState();
+      clearScopedCaches();
       saveSession(null);
       nav("/login");
     } catch {
@@ -76,8 +94,10 @@ function Shell() {
   function switchMode(next: ActiveProvider) {
     setActiveProvider(next);
     setMode(next);
-    nav(next === "cursor" ? "/dashboard" : "/codex");
+    nav(next === "cursor" ? "/cursor" : "/codex");
   }
+
+  if (!window.aihubDesktop && getSession()?.user.role === "admin") return <main className="main"><Outlet /></main>;
 
   return (
     <div className="layout">
@@ -100,6 +120,7 @@ function Shell() {
             </button>
           </div>
           <p className="muted compact">当前：{providerLabel(mode)} · 采集与提醒双端继续</p>
+          <button className="btn ghost" onClick={()=>nav('/choose')}>选择工作模式</button>
         </div>
         {mode === "codex" ? (
           <>
@@ -120,6 +141,7 @@ function Shell() {
               <NavLink to="/devices">
                 <span>▣</span> 设备管理
               </NavLink>
+              {getSession()?.user.role === "admin" && <NavLink to="/admin"><span>⚙</span> 账户管理</NavLink>}
               <NavLink to="/login">
                 <span>⇄</span> 切换服务器
               </NavLink>
@@ -129,9 +151,7 @@ function Shell() {
           <>
             <p className="nav-label">CURSOR 工作空间</p>
             <nav className="nav">
-              <NavLink to="/dashboard">
-                <span>◈</span> 额度看板
-              </NavLink>
+              <NavLink to="/cursor"><span>◈</span> Cursor 工作台</NavLink>
               <NavLink to="/rules">
                 <span>◷</span> 提醒规则
               </NavLink>
@@ -166,11 +186,6 @@ function Shell() {
         </div>
       </aside>
       <main className="main">
-        {getSession()?.user.email === "demo@aihub.local" && (
-          <div className="demo-banner">
-            本地工作空间 · {mode === "cursor" ? "Cursor 数据来自电脑采集或手工登记" : "Codex 数据来自电脑采集"}，建议仅供安排任务参考。
-          </div>
-        )}
         <StrongReminders />
         <Outlet />
       </main>

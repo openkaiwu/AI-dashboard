@@ -3,12 +3,63 @@ package api
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"log/slog"
+	"net/mail"
+	"strings"
 	"time"
 
 	"aihub.dev/server/internal/httpx"
 	"golang.org/x/crypto/bcrypt"
 )
+
+// BootstrapAdmin succeeds only while no administrator exists. Existing users can
+// be promoted once, but all their old devices are already revoked by migration.
+func BootstrapAdmin(ctx context.Context, database *sql.DB, email, password string) error {
+	email = strings.ToLower(strings.TrimSpace(email))
+	addr, e := mail.ParseAddress(email)
+	if e != nil || addr.Address != email || len(email) > 254 || len(password) < 8 || len(password) > 72 {
+		return errors.New("invalid email or password (8-72 bytes)")
+	}
+	hash, e := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if e != nil {
+		return e
+	}
+	tx, e := database.BeginTx(ctx, nil)
+	if e != nil {
+		return e
+	}
+	defer tx.Rollback()
+	if _, e = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(4182702)`); e != nil {
+		return e
+	}
+	var count int
+	if e = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM users WHERE role='admin'`).Scan(&count); e != nil {
+		return e
+	}
+	if count > 0 {
+		return errors.New("administrator already initialized")
+	}
+	var uid string
+	e = tx.QueryRowContext(ctx, `SELECT id FROM users WHERE email=$1`, email).Scan(&uid)
+	if e != nil && e != sql.ErrNoRows {
+		return e
+	}
+	if e == sql.ErrNoRows {
+		uid = httpx.NewID("usr")
+		if _, e = tx.ExecContext(ctx, `INSERT INTO users(id,email,password_hash,created_at,role,account_status) VALUES($1,$2,$3,$4,'admin','active')`, uid, email, string(hash), time.Now().UTC().Format(time.RFC3339)); e != nil {
+			return e
+		}
+		if e = insertDefaultRules(ctx, tx, uid, time.Now().UTC().Format(time.RFC3339)); e != nil {
+			return e
+		}
+	} else {
+		if _, e = tx.ExecContext(ctx, `UPDATE users SET password_hash=$1,role='admin',account_status='active' WHERE id=$2`, string(hash), uid); e != nil {
+			return e
+		}
+	}
+	return tx.Commit()
+}
 
 func SeedProviders(ctx context.Context, db *sql.DB) error {
 	providers := []struct {

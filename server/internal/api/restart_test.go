@@ -39,6 +39,9 @@ func TestServerProcess(t *testing.T) {
 }
 func TestActualProcessRestart(t *testing.T) {
 	database := testdb.Open(t)
+	if e := api.BootstrapAdmin(t.Context(), database, "m0@example.com", "test-password-123"); e != nil {
+		t.Fatal(e)
+	}
 	var schema string
 	if e := database.QueryRow("SHOW search_path").Scan(&schema); e != nil {
 		t.Fatal(e)

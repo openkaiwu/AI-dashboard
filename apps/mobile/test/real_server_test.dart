@@ -11,14 +11,16 @@ void main() {
   // Two independent executors model two devices; never share one executor.
   driftRuntimeOptions.dontWarnAboutMultipleDatabases = true;
   final base = Platform.environment['AIHUB_INTEGRATION_URL'];
+  final integrationEmail = Platform.environment['AIHUB_INTEGRATION_EMAIL'];
+  final codexEmail = Platform.environment['AIHUB_INTEGRATION_CODEX_EMAIL'];
+  final integrationPassword = Platform.environment['AIHUB_INTEGRATION_PASSWORD'];
   test('two Drift clients converge through real Go/PostgreSQL HTTP API',
       () async {
     final a = HubApi(base!, (_) async {}), b = HubApi(base, (_) async {});
     addTearDown(a.client.close);
     addTearDown(b.client.close);
-    final email = 'flutter-${const Uuid().v4()}@example.test';
-    await a.signIn(email, 'integration-test-password', 'Flutter A', true);
-    await b.signIn(email, 'integration-test-password', 'Flutter B', false);
+    await a.signIn(integrationEmail!, integrationPassword!, 'Flutter A', const Uuid().v4(), kind:'desktop');
+    await b.signIn(integrationEmail, integrationPassword, 'Flutter B', const Uuid().v4());
     final sa = HubStore(NativeDatabase.memory()),
         sb = HubStore(NativeDatabase.memory());
     addTearDown(sa.close);
@@ -39,18 +41,17 @@ void main() {
     await ea.sync();
     await eb.sync();
     expect((await eb.state()).notes['shared']!['op'], 'delete');
-    await a.call('DELETE', '/api/v1/devices/${b.session!['device_id']}');
-    await expectLater(eb.sync(), throwsA(isA<ApiFailure>()));
-  }, skip: base == null ? 'AIHUB_INTEGRATION_URL required' : false);
+    await expectLater(a.call('DELETE', '/api/v1/devices/${b.session!['device_id']}'),
+        throwsA(isA<ApiFailure>()));
+  }, skip: base == null || integrationEmail == null || integrationPassword == null ? 'provisioned integration account required' : false);
   test('Codex desktop upload reaches mobile and survives cache reopen',
       () async {
     final desktop = HubApi(base!, (_) async {}),
         mobile = HubApi(base, (_) async {});
     addTearDown(desktop.client.close);
     addTearDown(mobile.client.close);
-    final email = 'codex-${const Uuid().v4()}@example.test';
-    await desktop.signIn(email, 'integration-test-password', 'Desktop', true);
-    await mobile.signIn(email, 'integration-test-password', 'Phone', false);
+    await desktop.signIn(codexEmail!, integrationPassword!, 'Desktop', const Uuid().v4(), kind:'desktop');
+    await mobile.signIn(codexEmail, integrationPassword, 'Phone', const Uuid().v4());
     final connection = await desktop
         .call('POST', '/api/v1/codex/bridges', {'name': 'Desktop Codex'});
     await desktop.raw(
@@ -102,5 +103,5 @@ void main() {
         (await mobile.call('GET', '/api/v1/codex/bridges'))['bridges']
             .single['revoked_at'],
         isNotNull);
-  }, skip: base == null ? 'AIHUB_INTEGRATION_URL required' : false);
+  }, skip: base == null || codexEmail == null || integrationPassword == null ? 'provisioned Codex integration account required' : false);
 }

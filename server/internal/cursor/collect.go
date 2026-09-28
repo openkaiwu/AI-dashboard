@@ -21,12 +21,12 @@ const (
 type periodUsage struct {
 	BillingCycleEnd string `json:"billingCycleEnd"`
 	PlanUsage       struct {
-		TotalPercentUsed float64 `json:"totalPercentUsed"`
-		AutoPercentUsed  float64 `json:"autoPercentUsed"`
-		APIPercentUsed   float64 `json:"apiPercentUsed"`
-		Remaining        float64 `json:"remaining"`
-		Limit            float64 `json:"limit"`
-		IncludedSpend    float64 `json:"includedSpend"`
+		TotalPercentUsed *float64 `json:"totalPercentUsed"`
+		AutoPercentUsed  *float64 `json:"autoPercentUsed"`
+		APIPercentUsed   *float64 `json:"apiPercentUsed"`
+		Remaining        float64  `json:"remaining"`
+		Limit            float64  `json:"limit"`
+		IncludedSpend    float64  `json:"includedSpend"`
 	} `json:"planUsage"`
 }
 
@@ -83,8 +83,8 @@ func Normalize(raw []byte, planName string, now time.Time, source string) (Snaps
 		remain := remainCents / 100
 		out.RemainingUSD = &remain
 	}
-	if body.PlanUsage.TotalPercentUsed >= 0 && body.PlanUsage.TotalPercentUsed <= 100 {
-		out.UsedPercent = percentPtr(body.PlanUsage.TotalPercentUsed)
+	if body.PlanUsage.TotalPercentUsed != nil {
+		out.UsedPercent = percentPtr(*body.PlanUsage.TotalPercentUsed)
 	} else if out.LimitUSD != nil && *out.LimitUSD > 0 && out.RemainingUSD != nil {
 		used := (1 - (*out.RemainingUSD / *out.LimitUSD)) * 100
 		if used < 0 {
@@ -95,16 +95,23 @@ func Normalize(raw []byte, planName string, now time.Time, source string) (Snaps
 		}
 		out.UsedPercent = &used
 	}
-	if auto := percentPtr(body.PlanUsage.AutoPercentUsed); auto != nil {
+	if auto := optionalPercent(body.PlanUsage.AutoPercentUsed); auto != nil {
 		out.Buckets = append(out.Buckets, BucketUsage{ScopeKey: "cursor_models", Label: "Cursor Models", UsedPercent: auto})
 	}
-	if api := percentPtr(body.PlanUsage.APIPercentUsed); api != nil {
+	if api := optionalPercent(body.PlanUsage.APIPercentUsed); api != nil {
 		out.Buckets = append(out.Buckets, BucketUsage{ScopeKey: "other_models", Label: "Other Models", UsedPercent: api})
 	}
 	if out.LimitUSD == nil && out.RemainingUSD == nil && out.UsedPercent == nil && len(out.Buckets) == 0 {
 		return out, errors.New("quota unavailable")
 	}
 	return out, out.Validate(now)
+}
+
+func optionalPercent(v *float64) *float64 {
+	if v == nil {
+		return nil
+	}
+	return percentPtr(*v)
 }
 
 func NormalizeAuthUsage(raw []byte, planName string, now time.Time) (Snapshot, error) {

@@ -17,6 +17,7 @@ import (
 	"aihub.dev/server/internal/clock"
 	"aihub.dev/server/internal/connector"
 	"aihub.dev/server/internal/httpx"
+	"aihub.dev/server/internal/provider"
 	syncservice "aihub.dev/server/internal/sync"
 )
 
@@ -47,6 +48,8 @@ func (s *Server) Handler() http.Handler {
 		return s.evaluateUser(ctx, uid)
 	}}
 	mux.Handle("GET /api/v1/codex/overview", authService.Middleware(bridgeService.Overview))
+	mux.Handle("GET /api/v1/codex/plan", authService.Middleware(bridgeService.Plan))
+	mux.Handle("PUT /api/v1/codex/plan", authService.Middleware(bridgeService.Plan))
 	mux.Handle("PATCH /api/v1/codex/preferences", authService.Middleware(bridgeService.Preferences))
 	mux.Handle("POST /api/v1/codex/alerts/{id}", authService.Middleware(bridgeService.AlertAction))
 	mux.Handle("GET /api/v1/codex/bridges", authService.Middleware(bridgeService.List))
@@ -54,11 +57,18 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("DELETE /api/v1/codex/bridges/{id}", authService.Middleware(bridgeService.Revoke))
 	mux.HandleFunc("POST /api/v1/codex/snapshot", bridgeService.Upload)
 	mux.HandleFunc("POST /api/v1/cursor/snapshot", bridgeService.UploadCursor)
+	mux.HandleFunc("POST /api/v1/connectors/sample", bridgeService.SampleUpload)
 	mux.HandleFunc("GET /ready", s.health)
 	mux.HandleFunc("GET /api/v1/meta", func(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteJSON(w, 200, map[string]any{"protocol": 1, "schema": 1, "version": "0.2.0-m0"})
 	})
 	mux.HandleFunc("POST /api/v1/auth/refresh", authService.Refresh)
+	mux.Handle("GET /api/v1/admin/users", authService.Middleware(authService.AdminUsers))
+	mux.Handle("POST /api/v1/admin/users", authService.Middleware(authService.AdminCreateUser))
+	mux.Handle("PATCH /api/v1/admin/users/{id}/status", authService.Middleware(authService.AdminStatus))
+	mux.Handle("POST /api/v1/admin/users/{id}/password", authService.Middleware(authService.AdminPassword))
+	mux.Handle("GET /api/v1/admin/users/{id}/devices", authService.Middleware(authService.AdminDevices))
+	mux.Handle("DELETE /api/v1/admin/users/{id}/devices/{device}", authService.Middleware(authService.AdminUnbind))
 	mux.Handle("POST /api/v1/auth/logout", authService.Middleware(authService.Logout))
 	mux.Handle("GET /api/v1/devices", authService.Middleware(authService.Devices))
 	mux.Handle("DELETE /api/v1/devices/{id}", authService.Middleware(authService.Revoke))
@@ -73,13 +83,23 @@ func (s *Server) Handler() http.Handler {
 
 	mux.Handle("GET /api/v1/me", s.authed(s.me))
 	mux.Handle("GET /api/v1/providers", s.authed(s.listProviders))
+	mux.Handle("GET /api/v1/connectors", s.authed(func(w http.ResponseWriter, r *http.Request) {
+		manifests := []provider.Manifest{}
+		for _, c := range provider.LocalConnectors() {
+			manifests = append(manifests, c.Manifest())
+		}
+		httpx.WriteJSON(w, 200, map[string]any{"connectors": manifests})
+	}))
 	mux.Handle("GET /api/v1/dashboard", s.authed(s.dashboard))
 
 	mux.Handle("GET /api/v1/provider-accounts", s.authed(s.listAccounts))
 	mux.Handle("POST /api/v1/provider-accounts", s.authed(s.createAccount))
 	mux.Handle("GET /api/v1/provider-accounts/{id}", s.authed(s.getAccount))
+	mux.Handle("PATCH /api/v1/provider-accounts/{id}", s.authed(s.patchAccount))
 	mux.Handle("DELETE /api/v1/provider-accounts/{id}", s.authed(s.deleteAccount))
 	mux.Handle("POST /api/v1/provider-accounts/{id}/quota-buckets", s.authed(s.createBucket))
+	mux.Handle("GET /api/v1/provider-accounts/{id}/billing-events", s.authed(s.billingEvents))
+	mux.Handle("POST /api/v1/provider-accounts/{id}/billing-events", s.authed(s.billingEvents))
 
 	mux.Handle("POST /api/v1/quota-buckets/{id}/manual-snapshot", s.authed(s.manualSnapshot))
 	mux.Handle("GET /api/v1/quota-buckets/{id}/snapshots", s.authed(s.listSnapshots))
@@ -93,6 +113,7 @@ func (s *Server) Handler() http.Handler {
 
 	mux.Handle("GET /api/v1/notifications", s.authed(s.listNotifications))
 	mux.Handle("POST /api/v1/notifications/{id}/read", s.authed(s.readNotification))
+	mux.Handle("POST /api/v1/notifications/{id}/action", s.authed(s.notificationAction))
 	mux.Handle("POST /api/v1/notifications/read-all", s.authed(s.readAllNotifications))
 
 	if s.dist != "" {

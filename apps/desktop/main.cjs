@@ -3,7 +3,6 @@ const fs=require('node:fs');
 const path=require('node:path');
 const runtime=require('./runtime.cjs');
 let win,tray,quitting=false,alertOpen=false;
-app.commandLine.appendSwitch('ignore-certificate-errors');
 function uiOrigin(){return runtime.getUiOrigin();}
 function allowOrigin(url){try{return new URL(url).origin===uiOrigin();}catch{return false;}}
 if(!app.requestSingleInstanceLock())app.quit();
@@ -45,11 +44,23 @@ else {
    }finally{win.flashFrame(false);alertOpen=false;}
   }
   ipcMain.handle('open-codex',async e=>{if(e.sender!==win.webContents||e.senderFrame!==win.webContents.mainFrame||!allowOrigin(e.senderFrame.url))throw Error('Unauthorized sender');await shell.openExternal('codex://');});
+  ipcMain.on('session-get',(e,id)=>{if(e.sender!==win.webContents||e.senderFrame!==win.webContents.mainFrame||!allowOrigin(e.senderFrame.url)||typeof id!=='string'||id.length>128)return;e.returnValue=runtime.readDesktopSession(id);});
+  ipcMain.on('session-set',(e,id,value)=>{if(e.sender!==win.webContents||e.senderFrame!==win.webContents.mainFrame||!allowOrigin(e.senderFrame.url)||typeof id!=='string'||id.length>128)return;try{runtime.writeDesktopSession(id,value);e.returnValue=true;setImmediate(()=>void runtime.syncBridgeFromSession(win.webContents,runtime.loadConfig(runtime.dataDir())));}catch{e.returnValue=false;}});
+  ipcMain.handle('configure-server',async(e,url)=>{
+   if(e.sender!==win.webContents||e.senderFrame!==win.webContents.mainFrame||!e.senderFrame.url.startsWith('file:')||!decodeURIComponent(e.senderFrame.url).endsWith('/onboarding.html'))throw Error('Unauthorized sender');
+   const origin=runtime.setCloudServer(url);
+   setImmediate(()=>void reconnect(true));
+   return origin;
+  });
+  ipcMain.handle('extension-pair-code',async e=>{
+   if(e.sender!==win.webContents||e.senderFrame!==win.webContents.mainFrame||!allowOrigin(e.senderFrame.url))throw Error('Unauthorized sender');
+   return runtime.extensionPairCode();
+  });
   async function askMode(force=false){
    const pref=runtime.readModePreference();
    if(!force&&pref?.remember&&pref.mode){runtime.setUserMode(pref.mode);return pref.mode;}
    win.show();win.focus();
-   const pick=await dialog.showMessageBox(win,{type:'question',title:'AI Hub · 选择使用方式',message:'你想如何开始使用？',detail:`【登录服务器】连接 ${runtime.DEFAULT_CLOUD}，使用账户登录并同步 Codex 数据。\n\n【离线本地】仅在本机运行（127.0.0.1），查看演示数据，需 WSL + PostgreSQL。`,buttons:['登录服务器','离线本地模式'],defaultId:0,cancelId:1,noLink:true});
+   const pick=await dialog.showMessageBox(win,{type:'question',title:'AI Hub · 选择使用方式',message:'你想如何开始使用？',detail:'【登录服务器】输入管理员提供的 HTTPS 地址。\n\n【本地开发】仅在本机运行（127.0.0.1），需要 WSL、PostgreSQL 和管理员初始化。',buttons:['登录服务器','本地开发模式'],defaultId:0,cancelId:0,noLink:true});
    const mode=pick.response===0?'cloud':'local';
    const remember=await dialog.showMessageBox(win,{type:'question',title:'记住选择？',message:'下次启动是否直接使用该模式？',buttons:['记住','每次询问'],defaultId:0,cancelId:1,noLink:true});
    fs.writeFileSync(path.join(runtime.dataDir(),'mode-preference.json'),JSON.stringify({mode,remember:remember.response===0},null,2));
@@ -59,18 +70,16 @@ else {
   async function openApp(){
    const config=runtime.loadConfig(runtime.dataDir());
    const origin=uiOrigin();
-   await win.loadURL(origin+'/login');
-   await runtime.injectWebSession(win.webContents,config);
-   await runtime.syncBridgeFromSession(win.webContents,config);
    await win.loadURL(origin+'/');
+   await runtime.syncBridgeFromSession(win.webContents,config);
    win.show();
   }
   async function handleCloudFailure(err){
    const hint=runtime.startupMessage()||err?.message||String(err||'连接失败');
-   const pick=await dialog.showMessageBox(win,{type:'warning',title:'无法连接服务器',message:hint,detail:'可能原因：网络代理（Clash 等）、IP 证书、或服务器 443 未放行。可改选离线本地模式继续使用。',buttons:['重试服务器','改用离线本地','退出'],defaultId:1,cancelId:2,noLink:true});
+   const pick=await dialog.showMessageBox(win,{type:'warning',title:'无法连接服务器',message:hint,detail:'检查服务器地址、网络连接和 HTTPS 证书。',buttons:['重试','修改服务器地址','退出'],defaultId:0,cancelId:2,noLink:true});
    if(pick.response===2)return app.quit();
-   if(pick.response===1){runtime.setUserMode('local');await reconnect(true);return;}
-   await reconnect(false);
+   if(pick.response===1){await win.loadFile(path.join(__dirname,'onboarding.html'));win.show();return;}
+   await reconnect(true);
   }
   async function reconnect(skipAsk){
    runtime.resetMode();
@@ -86,9 +95,7 @@ else {
    try{
     await askMode(skipAsk);
     const mode=runtime.getActiveMode();
-    if(mode==='cloud'&&!await runtime.probeCloud(runtime.loadConfig(runtime.dataDir()).cloudServer)){
-     return handleCloudFailure(new Error('公网服务器不可达'));
-    }
+    if(mode==='cloud'&&runtime.loadConfig(runtime.dataDir()).cloudServer===runtime.DEFAULT_CLOUD){await win.loadFile(path.join(__dirname,'onboarding.html'));win.show();return;}
     await runtime.ensureReady();
     await openApp();
    }catch(err){
@@ -98,6 +105,7 @@ else {
    }
   }
   win.webContents.on('did-finish-load',()=>{void runtime.syncBridgeFromSession(win.webContents,runtime.loadConfig(runtime.dataDir()));});
+  setInterval(()=>{if(!quitting&&win&&!win.isDestroyed())void runtime.syncBridgeFromSession(win.webContents,runtime.loadConfig(runtime.dataDir()));},60000).unref();
   await start(false);
  });
 }

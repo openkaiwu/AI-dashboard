@@ -64,6 +64,10 @@ func (s *Service) Evaluate(ctx context.Context, uid string, now time.Time) (map[
 	if _, e = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,42))`, uid); e != nil {
 		return nil, e
 	}
+	plan, planSource, e := getPlan(ctx, tx, uid)
+	if e != nil {
+		return nil, e
+	}
 	p := codex.Defaults()
 	var raw []byte
 	e = tx.QueryRowContext(ctx, `SELECT settings FROM codex_preferences WHERE user_id=$1`, uid).Scan(&raw)
@@ -98,6 +102,7 @@ func (s *Service) Evaluate(ctx context.Context, uid string, now time.Time) (map[
 				return nil, e
 			}
 		}
+		d.Snapshot = d.Snapshot.ForPlan(plan)
 		devices = append(devices, d)
 	}
 	e = rows.Err()
@@ -126,7 +131,7 @@ func (s *Service) Evaluate(ctx context.Context, uid string, now time.Time) (map[
 				h.Close()
 				return nil, e
 			}
-			history = append(history, v)
+			history = append(history, v.ForPlan(plan))
 		}
 		e = h.Err()
 		h.Close()
@@ -187,5 +192,5 @@ func (s *Service) Evaluate(ctx context.Context, uid string, now time.Time) (map[
 	if e = tx.Commit(); e != nil {
 		return nil, e
 	}
-	return map[string]any{"generated_at": now, "preferences": p, "quiet": p.Quiet(now), "devices": reports, "alerts": alerts}, nil
+	return map[string]any{"generated_at": now, "preferences": p, "quiet": p.Quiet(now), "devices": reports, "alerts": alerts, "plan": map[string]string{"plan_type": plan, "source_type": planSource}}, nil
 }

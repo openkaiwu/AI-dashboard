@@ -1,7 +1,7 @@
 import {useEffect,useRef,useState} from 'react';
 import {request} from './api';
 import {scope} from './session';
-declare global {interface Window {aihubDesktop?:{alert:(value:{title:string;body:string;provider?:string})=>Promise<string>;openCodex:()=>Promise<void>;openDashboard?:()=>Promise<void>}}}
+declare global {interface Window {aihubDesktop?:{alert:(value:{title:string;body:string;provider?:string})=>Promise<string>;openCodex:()=>Promise<void>;openDashboard?:()=>Promise<void>;sessionGet:(id:string)=>import('./session').Session|null;sessionSet:(id:string,value:import('./session').Session|null)=>boolean;extensionPairCode:()=>Promise<string>;configureServer:(url:string)=>Promise<string>}}}
 import {eligibleStrong,type Alert} from './strongReminderPolicy';
 import {CODEX_POLL_MS} from './codexTiming';
 import {ActiveProvider,setActiveProvider} from './providerMode';
@@ -24,8 +24,9 @@ export default function StrongReminders(){
    if(slug==='cursor'||slug==='codex')setActiveProvider(slug);
    const action=await display({title:next.provider_name?`${next.provider_name} · ${next.title}`:next.title,body:next.body,provider:next.provider_name});
    if(!alive||action==='retry')return true;
-   if(action==='read')await request('/api/v1/notifications/'+encodeURIComponent(next.id)+'/read',{method:'POST'});
-   localStorage.setItem(key+':strong-seen:gen:'+next.id,next.id);setError('');
+   await request('/api/v1/notifications/'+encodeURIComponent(next.id)+'/action',{method:'POST',body:JSON.stringify({action})});
+   if(action!=='snooze')localStorage.setItem(key+':strong-seen:gen:'+next.id,next.id);
+   setError('');
    return true;
   }
   async function pollCodex(){

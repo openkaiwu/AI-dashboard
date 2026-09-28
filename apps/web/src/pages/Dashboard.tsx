@@ -17,6 +17,7 @@ const SOURCE_LABEL: Record<string, string> = {
   official_api: "官方 API",
   official_web_ui: "网页读取",
   cursor_api2: "Cursor API",
+  file_import: "文件导入",
 };
 
 const BUCKET_LABEL: Record<string, string> = {

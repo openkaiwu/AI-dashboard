@@ -27,7 +27,7 @@ class _CodexPageState extends State<CodexPage>
   @override
   void initState() {
     super.initState();
-    tabs = TabController(length: 3, vsync: this);
+    tabs = TabController(length: 5, vsync: this);
     unawaited(load());
     timer = Timer.periodic(
         const Duration(minutes: 5), (_) => unawaited(refresh()));
@@ -307,6 +307,37 @@ class _CodexPageState extends State<CodexPage>
     ]);
   }
 
+  Widget planTab(Json? d) {
+    final metrics = (d?['analysis']?['metrics'] as List?)?.cast<Json>() ?? [];
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      Text('使用计划', style: Theme.of(context).textTheme.titleMedium),
+      const Text('按已观测的额度与重置时间估算；数据不足时不推断。'),
+      for (final m in metrics) Card(child: Padding(padding: const EdgeInsets.all(16), child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text('${m['bucket']} · ${(m['duration_minutes'] as num) / 60} 小时额度'),
+          Text('剩余 ${(m['remaining'] as num).toStringAsFixed(0)}% · 距重置 ${hours(m['hours_left'] as num?)}'),
+          Text(m['daily_budget'] == null ? '暂无可靠的每日预算' : '均匀使用参考：每天 ${(m['daily_budget'] as num).toStringAsFixed(1)}%'),
+        ],
+      ))),
+      if (metrics.isEmpty) const Text('暂无可制定计划的额度窗口。'),
+    ]);
+  }
+
+  Widget radarTab(Json? d) {
+    final metrics = (d?['analysis']?['metrics'] as List?)?.cast<Json>() ?? [];
+    final news = d?['snapshot']?['news'] as Json?;
+    final items = (news?['items'] as List?)?.cast<Json>() ?? [];
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      Text('重置雷达', style: Theme.of(context).textTheme.titleMedium),
+      const Text('账户重置以本机采集到的窗口为准；外部消息仅供参考。'),
+      for (final m in metrics.where((m) => m['resets_at'] != null))
+        ListTile(title: Text('${m['bucket']} · ${(m['duration_minutes'] as num) / 60} 小时'),
+          subtitle: Text('重置于 ${DateTime.fromMillisecondsSinceEpoch((m['resets_at'] as num).toInt() * 1000).toLocal()}')),
+      if (metrics.every((m) => m['resets_at'] == null)) const Text('暂无可核实的重置时间。'),
+      for (final item in items) Card(child: Padding(padding: const EdgeInsets.all(14), child: Text(item['summary']?.toString() ?? ''))),
+    ]);
+  }
+
   String alertState(Json a) {
     if (a['dismissed'] == true) return 'dismissed';
     final snooze = a['snoozed_until'];
@@ -351,7 +382,7 @@ class _CodexPageState extends State<CodexPage>
           FilterChip(
             label: Text('${entry[1]} · ${alerts.where((a) => alertState(a) == entry[0]).length}'),
             selected: reminderFilter == entry[0],
-            onSelected: (_) => setState(() => reminderFilter = entry[0]!),
+            onSelected: (_) => setState(() => reminderFilter = entry[0]),
           ),
       ]),
       const SizedBox(height: 12),
@@ -396,8 +427,23 @@ class _CodexPageState extends State<CodexPage>
 
   Widget settingsTab() {
     final prefs = overview?['preferences'] as Json?;
+    final plan = overview?['plan'] as Json?;
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       Text('按你的习惯提醒', style: Theme.of(context).textTheme.titleMedium),
+      DropdownButtonFormField<String>(
+        initialValue: plan?['plan_type'] as String? ?? 'unknown',
+        decoration: const InputDecoration(labelText: 'Codex 套餐（手动设置）'),
+        items: const [
+          DropdownMenuItem(value: 'unknown', child: Text('未知')),
+          DropdownMenuItem(value: 'plus', child: Text('Plus · 显示五小时额度')),
+          DropdownMenuItem(value: 'pro', child: Text('Pro · 隐藏五小时额度及提醒')),
+        ],
+        onChanged: (value) async {
+          if (value == null) return;
+          try { await widget.api.call('PUT', '/api/v1/codex/plan', {'plan_type': value}); await refresh(); }
+          catch (_) { if (mounted) setState(() => error = '套餐设置失败'); }
+        },
+      ),
       const SizedBox(height: 8),
       const Text('规则跨端保存；手机端暂不支持系统推送，仅站内提醒。'),
       const SizedBox(height: 16),
@@ -465,12 +511,15 @@ class _CodexPageState extends State<CodexPage>
       const SizedBox(height: 12),
       TabBar(
         controller: tabs,
+        isScrollable: true,
         labelColor: HubTheme.accent,
         unselectedLabelColor: HubTheme.muted,
         indicatorColor: HubTheme.accent,
         tabs: const [
           Tab(text: '额度总览'),
+          Tab(text: '使用计划'),
           Tab(text: '提醒中心'),
+          Tab(text: '重置雷达'),
           Tab(text: '提醒设置'),
         ],
       ),
@@ -480,7 +529,9 @@ class _CodexPageState extends State<CodexPage>
           controller: tabs,
           children: [
             ListView(children: [overviewTab(d, isStale)]),
+            ListView(children: [planTab(d)]),
             ListView(children: [remindersTab()]),
+            ListView(children: [radarTab(d)]),
             ListView(children: [settingsTab()]),
           ],
         ),

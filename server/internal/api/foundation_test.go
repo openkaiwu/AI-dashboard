@@ -33,11 +33,11 @@ func call(t *testing.T, ts *httptest.Server, method, path, token string, body an
 	return res.StatusCode, out
 }
 func login(t *testing.T, ts *httptest.Server, register bool, name string) map[string]any {
-	path := "login"
+	kind := "mobile"
 	if register {
-		path = "register"
+		kind = "desktop"
 	}
-	code, v := call(t, ts, "POST", "/api/v1/auth/"+path, "", map[string]string{"email": "m0@example.com", "password": "test-password-123", "device_name": name})
+	code, v := call(t, ts, "POST", "/api/v1/auth/login", "", map[string]string{"email": "m0@example.com", "password": "test-password-123", "device_name": name, "device_kind": kind, "installation_id": "integration-install-" + name})
 	if code >= 300 {
 		t.Fatalf("sign in %d: %v", code, v)
 	}
@@ -55,6 +55,18 @@ func push(t *testing.T, ts *httptest.Server, token string, body any) map[string]
 }
 func server(t *testing.T, database *sql.DB) *httptest.Server {
 	t.Helper()
+	var admins int
+	if e := database.QueryRow(`SELECT count(*) FROM users WHERE role='admin'`).Scan(&admins); e != nil {
+		t.Fatal(e)
+	}
+	if admins == 0 {
+		if e := api.BootstrapAdmin(t.Context(), database, "m0@example.com", "test-password-123"); e != nil {
+			t.Fatal(e)
+		}
+	}
+	if e := api.SeedProviders(t.Context(), database); e != nil {
+		t.Fatal(e)
+	}
 	ts := httptest.NewServer(api.New(database, nil, "").Handler())
 	t.Cleanup(ts.Close)
 	return ts
@@ -120,8 +132,12 @@ func TestM0TwoDeviceRecovery(t *testing.T) {
 		t.Fatal("rebuild lost events")
 	}
 	// Tenant isolation: a different account receives no events or device access.
-	code, c := call(t, ts2, "POST", "/api/v1/auth/register", "", map[string]string{"email": "other@example.com", "password": "test-password-456", "device_name": "other"})
+	code, c := call(t, ts2, "POST", "/api/v1/admin/users", at, map[string]string{"email": "other@example.com", "password": "test-password-456"})
 	if code != 201 {
+		t.Fatal(c)
+	}
+	code, c = call(t, ts2, "POST", "/api/v1/auth/login", "", map[string]string{"email": "other@example.com", "password": "test-password-456", "device_name": "other", "device_kind": "desktop", "installation_id": "other-installation-id-1"})
+	if code != 200 {
 		t.Fatal(c)
 	}
 	ct := c["token"].(string)
@@ -129,10 +145,10 @@ func TestM0TwoDeviceRecovery(t *testing.T) {
 	if len(page["events"].([]any)) != 0 {
 		t.Fatal("tenant data leak")
 	}
-	if code, _ = call(t, ts2, "DELETE", "/api/v1/devices/"+b["device_id"].(string), ct, nil); code != 404 {
+	if code, _ = call(t, ts2, "DELETE", "/api/v1/admin/users/"+a["user"].(map[string]any)["id"].(string)+"/devices/"+b["device_id"].(string), ct, nil); code != 403 {
 		t.Fatal("cross-user revoke")
 	}
-	if code, _ = call(t, ts2, "DELETE", "/api/v1/devices/"+b["device_id"].(string), at, nil); code != 200 {
+	if code, _ = call(t, ts2, "DELETE", "/api/v1/admin/users/"+a["user"].(map[string]any)["id"].(string)+"/devices/"+b["device_id"].(string), at, nil); code != 200 {
 		t.Fatal("revoke")
 	}
 	for _, path := range []string{"/api/v1/me", "/api/v1/sync/pull"} {
@@ -198,7 +214,7 @@ func TestRefreshRotationReuseAndExpiry(t *testing.T) {
 	database := testdb.Open(t)
 	ts := server(t, database)
 	a := login(t, ts, true, "A")
-	if code, _ := call(t, ts, "POST", "/api/v1/auth/login", "", map[string]string{"email": "m0@example.com", "password": "badpassword"}); code != 401 {
+	if code, _ := call(t, ts, "POST", "/api/v1/auth/login", "", map[string]string{"email": "m0@example.com", "password": "badpassword", "device_kind": "desktop", "installation_id": "integration-install-A"}); code != 401 {
 		t.Fatal("wrong password")
 	}
 	refresh := map[string]string{"refresh_token": a["refresh_token"].(string)}

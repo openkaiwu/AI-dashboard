@@ -39,6 +39,11 @@ func collectionBlocksQuotaAlert(status string) bool {
 	}
 }
 
+func (s *Server) ownsProviderAccount(ctx context.Context, uid, accountID string) bool {
+	var exists bool
+	return s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM provider_accounts WHERE id=$1 AND user_id=$2)`, accountID, uid).Scan(&exists) == nil && exists
+}
+
 func (s *Server) listRules(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.db.QueryContext(r.Context(), `SELECT id, name, rule_type, enabled, params_json, provider_account_id, created_at, updated_at
 		FROM notification_rules WHERE user_id = $1 ORDER BY created_at`, userID(r))
@@ -94,6 +99,10 @@ func (s *Server) createRule(w http.ResponseWriter, r *http.Request) {
 	}
 	if strings.TrimSpace(req.Name) == "" || strings.TrimSpace(req.RuleType) == "" {
 		httpx.Error(w, http.StatusBadRequest, "invalid_input", "规则名称和类型必填")
+		return
+	}
+	if req.ProviderAccountID != "" && !s.ownsProviderAccount(r.Context(), userID(r), req.ProviderAccountID) {
+		httpx.Error(w, http.StatusNotFound, "not_found", "账户不存在")
 		return
 	}
 	raw, _ := json.Marshal(req.Params)
@@ -162,6 +171,10 @@ func (s *Server) patchRule(w http.ResponseWriter, r *http.Request) {
 			curAcct = sql.NullString{String: *req.ProviderAccountID, Valid: true}
 		}
 	}
+	if curAcct.Valid && !s.ownsProviderAccount(r.Context(), userID(r), curAcct.String) {
+		httpx.Error(w, http.StatusNotFound, "not_found", "账户不存在")
+		return
+	}
 	var acct any
 	if curAcct.Valid {
 		acct = curAcct.String
@@ -211,6 +224,10 @@ func (s *Server) previewRuleBody(w http.ResponseWriter, r *http.Request) {
 	}
 	var acct *string
 	if req.ProviderAccountID != "" {
+		if !s.ownsProviderAccount(r.Context(), userID(r), req.ProviderAccountID) {
+			httpx.Error(w, http.StatusNotFound, "not_found", "账户不存在")
+			return
+		}
 		acct = &req.ProviderAccountID
 	}
 	s.writePreview(w, r, notification.Rule{Type: req.RuleType, Params: req.Params, ProviderAccountID: acct, Enabled: true})
@@ -253,7 +270,8 @@ func (s *Server) writePreview(w http.ResponseWriter, r *http.Request, rule notif
 }
 
 func (s *Server) listNotifications(w http.ResponseWriter, r *http.Request) {
-	rows, err := s.db.QueryContext(r.Context(), `SELECT n.id, n.rule_id, n.provider_account_id, n.quota_bucket_id, n.title, n.body, n.severity, n.dedupe_key, n.status, n.created_at,
+	rows, err := s.db.QueryContext(r.Context(), `SELECT n.id, n.rule_id, n.provider_account_id, n.quota_bucket_id, n.title, n.body, n.severity, n.dedupe_key,
+		CASE WHEN n.status='snoozed' AND n.snoozed_until<=now() THEN 'unread' ELSE n.status END, n.created_at,
 		COALESCE(p.slug, ''), COALESCE(p.display_name, '')
 		FROM notifications n
 		LEFT JOIN provider_accounts a ON a.id = n.provider_account_id
@@ -297,6 +315,36 @@ func (s *Server) readNotification(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Server) notificationAction(w http.ResponseWriter, r *http.Request) {
+	var q struct {
+		Action string `json:"action"`
+	}
+	if httpx.Decode(r, &q) != nil || (q.Action != "read" && q.Action != "snooze" && q.Action != "dismiss") {
+		httpx.Error(w, 400, "invalid_action", "请选择已读、稍后提醒或忽略")
+		return
+	}
+	var result sql.Result
+	var err error
+	switch q.Action {
+	case "snooze":
+		result, err = s.db.ExecContext(r.Context(), `UPDATE notifications SET status='snoozed',snoozed_until=now()+interval '1 hour' WHERE id=$1 AND user_id=$2 AND status IN ('unread','snoozed')`, r.PathValue("id"), userID(r))
+	case "dismiss":
+		result, err = s.db.ExecContext(r.Context(), `UPDATE notifications SET status='dismissed',snoozed_until=NULL WHERE id=$1 AND user_id=$2`, r.PathValue("id"), userID(r))
+	default:
+		result, err = s.db.ExecContext(r.Context(), `UPDATE notifications SET status='read',snoozed_until=NULL WHERE id=$1 AND user_id=$2`, r.PathValue("id"), userID(r))
+	}
+	if err != nil {
+		httpx.Error(w, 503, "unavailable", "更新失败")
+		return
+	}
+	n, _ := result.RowsAffected()
+	if n == 0 {
+		httpx.Error(w, 404, "not_found", "提醒不存在或已处理")
+		return
+	}
+	httpx.WriteJSON(w, 200, map[string]any{"ok": true, "action": q.Action})
 }
 
 func (s *Server) readAllNotifications(w http.ResponseWriter, r *http.Request) {

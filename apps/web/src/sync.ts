@@ -24,6 +24,7 @@ async function write(key:string,state:State) {
  });
 }
 export async function loadState(){return read(scope());}
+export async function clearSyncState(){await write(scope(),empty());}
 async function change(key:string,fn:(s:State)=>void) {
  await navigator.locks.request("hub-state:"+key,async()=>{const s=await read(key);fn(s);await write(key,s);});
  dispatchEvent(new Event("hub-sync"));

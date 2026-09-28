@@ -1,0 +1,10 @@
+{
+  "manifest_version": 3,
+  "name": "AI Hub 固定页面采集 PoC",
+  "version": "0.1.0",
+  "description": "经逐站点授权，从固定样本页提取脱敏数值并经桌面 Bridge 上报。",
+  "permissions": ["activeTab", "scripting", "storage"],
+  "host_permissions": ["http://127.0.0.1:47831/*"],
+  "optional_host_permissions": ["http://localhost/*", "http://127.0.0.1/*", "https://*/*"],
+  "action": {"default_popup": "popup.html"}
+}

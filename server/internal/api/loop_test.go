@@ -18,13 +18,16 @@ func TestQuotaLoop(t *testing.T) {
 	if err := api.SeedProviders(t.Context(), database); err != nil {
 		t.Fatal(err)
 	}
+	if err := api.BootstrapAdmin(t.Context(), database, "dev@example.com", "password1"); err != nil {
+		t.Fatal(err)
+	}
 	now := time.Date(2026, 8, 27, 8, 0, 0, 0, time.UTC)
 	h := api.New(database, clock.Frozen{T: now}, "").Handler()
 	ts := httptest.NewServer(h)
 	t.Cleanup(ts.Close)
 
-	token := postJSON(t, ts, "/api/v1/auth/register", "", map[string]string{
-		"email": "dev@example.com", "password": "password1",
+	token := postJSON(t, ts, "/api/v1/auth/login", "", map[string]string{
+		"email": "dev@example.com", "password": "password1", "device_name": "desktop", "device_kind": "desktop", "installation_id": "loop-installation-desktop-1",
 	})["token"].(string)
 
 	me := getJSON(t, ts, "/api/v1/me", token)

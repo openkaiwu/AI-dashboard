@@ -77,7 +77,13 @@ func run() error {
 		return errors.New("cannot read bridge config")
 	}
 	var cfg config
-	if json.Unmarshal(raw, &cfg) != nil || !validServer(cfg.Server) || cfg.Token == "" {
+	if json.Unmarshal(raw, &cfg) != nil {
+		return errors.New("invalid bridge config")
+	}
+	if token := os.Getenv("AIHUB_BRIDGE_TOKEN"); token != "" {
+		cfg.Token = token
+	}
+	if !validServer(cfg.Server) || cfg.Token == "" {
 		return errors.New("invalid config: HTTPS server and bridge token required")
 	}
 	if cfg.IntervalSeconds < 300 {
@@ -86,18 +92,33 @@ func run() error {
 	client := &http.Client{Timeout: 20 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
+	if !*once { startExtensionBridge(ctx,client,cfg) }
+	next := map[string]time.Time{}
+	failures := map[string]int{}
+	update := func(slug string, ok bool) {
+		if ok {
+			failures[slug] = 0
+		} else if failures[slug] < 4 {
+			failures[slug]++
+		}
+		delay := time.Duration(cfg.IntervalSeconds) * time.Second * time.Duration(1<<failures[slug])
+		if delay > time.Hour {
+			delay = time.Hour
+		}
+		next[slug] = time.Now().Add(delay)
+	}
 
 	for {
-		if cfg.CodexPath != "" && filepath.IsAbs(cfg.CodexPath) {
-			uploadCodex(ctx, client, cfg, *path, *once)
+		if cfg.CodexPath != "" && filepath.IsAbs(cfg.CodexPath) && (*once || !time.Now().Before(next[provider.SlugCodex])) {
+			update(provider.SlugCodex, uploadCodex(ctx, client, cfg, *path, *once))
 		}
-		if cursorEnabled(cfg) {
-			uploadCursor(ctx, client, cfg, *path, *once)
+		if cursorEnabled(cfg) && (*once || !time.Now().Before(next[provider.SlugCursor])) {
+			update(provider.SlugCursor, uploadCursor(ctx, client, cfg, *path, *once))
 		}
 		if *once {
 			return nil
 		}
-		timer := time.NewTimer(time.Duration(cfg.IntervalSeconds) * time.Second)
+		timer := time.NewTimer(time.Minute)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
@@ -107,7 +128,7 @@ func run() error {
 	}
 }
 
-func uploadCodex(ctx context.Context, client *http.Client, cfg config, configPath string, once bool) {
+func uploadCodex(ctx context.Context, client *http.Client, cfg config, configPath string, once bool) bool {
 	sampleCtx, cancel := context.WithTimeout(ctx, 40*time.Second)
 	sample, e := codex.Collect(sampleCtx, cfg.CodexPath)
 	cancel()
@@ -123,20 +144,20 @@ func uploadCodex(ctx context.Context, client *http.Client, cfg config, configPat
 			payload, _ = json.Marshal(sample)
 		}
 	}
-	postSnapshot(ctx, client, cfg, provider.SlugCodex, payload, once, func() string {
+	return postSnapshot(ctx, client, cfg, provider.SlugCodex, payload, once, func() string {
 		return fmt.Sprintf("codex synced: status=%s buckets=%d", sample.Status, len(sample.Buckets))
 	})
 }
 
-func uploadCursor(ctx context.Context, client *http.Client, cfg config, configPath string, once bool) {
+func uploadCursor(ctx context.Context, client *http.Client, cfg config, configPath string, once bool) bool {
 	sample := collectCursor(configPath)
 	payload, _ := json.Marshal(sample)
-	postSnapshot(ctx, client, cfg, provider.SlugCursor, payload, once, func() string {
+	return postSnapshot(ctx, client, cfg, provider.SlugCursor, payload, once, func() string {
 		return fmt.Sprintf("cursor synced: status=%s", sample.Status)
 	})
 }
 
-func postSnapshot(ctx context.Context, client *http.Client, cfg config, slug string, payload []byte, once bool, okLine func() string) {
+func postSnapshot(ctx context.Context, client *http.Client, cfg config, slug string, payload []byte, once bool, okLine func() string) bool {
 	var path string
 	for _, c := range provider.LocalConnectors() {
 		if c.Slug() == slug {
@@ -145,14 +166,14 @@ func postSnapshot(ctx context.Context, client *http.Client, cfg config, slug str
 		}
 	}
 	if path == "" {
-		return
+		return false
 	}
 	req, e := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(cfg.Server, "/")+path, bytes.NewReader(payload))
 	if e != nil {
 		if once {
 			fmt.Fprintln(os.Stderr, "invalid upload request")
 		}
-		return
+		return false
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+cfg.Token)
@@ -162,7 +183,7 @@ func postSnapshot(ctx context.Context, client *http.Client, cfg config, slug str
 		if once {
 			fmt.Fprintln(os.Stderr, "upload failed")
 		}
-		return
+		return false
 	}
 	io.Copy(io.Discard, io.LimitReader(response.Body, 4096))
 	response.Body.Close()
@@ -176,9 +197,10 @@ func postSnapshot(ctx context.Context, client *http.Client, cfg config, slug str
 		} else {
 			fmt.Printf("%s upload rejected; retrying later\n", slug)
 		}
-		return
+		return false
 	}
 	fmt.Printf("%s %s\n", time.Now().UTC().Format(time.RFC3339), okLine())
+	return true
 }
 
 func main() {

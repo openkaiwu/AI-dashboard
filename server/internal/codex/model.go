@@ -28,6 +28,28 @@ type Snapshot struct {
 	News         *News         `json:"news,omitempty"`
 }
 
+// ForPlan leaves the captured snapshot intact. Five-hour windows are actionable
+// only when the subscription has been identified as Plus.
+func (s Snapshot) ForPlan(plan string) Snapshot {
+	if plan == "plus" {
+		return s
+	}
+	out := s
+	out.Buckets = make([]Bucket, 0, len(s.Buckets))
+	for _, b := range s.Buckets {
+		if b.Primary != nil && b.Primary.DurationMinutes == 300 {
+			b.Primary = nil
+		}
+		if b.Secondary != nil && b.Secondary.DurationMinutes == 300 {
+			b.Secondary = nil
+		}
+		if b.Primary != nil || b.Secondary != nil {
+			out.Buckets = append(out.Buckets, b)
+		}
+	}
+	return out
+}
+
 type ResetCredit struct {
 	ID        string `json:"id"`
 	ExpiresAt *int64 `json:"expires_at"`

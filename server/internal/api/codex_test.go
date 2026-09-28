@@ -32,7 +32,8 @@ func TestCodexBridgeAcrossDevices(t *testing.T) {
 	if code, _ = call(t, ts, "GET", "/api/v1/codex/bridges", token, nil); code != 401 {
 		t.Fatal("bridge token can read user data")
 	}
-	_, other := call(t, ts, "POST", "/api/v1/auth/register", "", map[string]string{"email": "other@example.com", "password": "test-password-123"})
+	_, _ = call(t, ts, "POST", "/api/v1/admin/users", at, map[string]string{"email": "other@example.com", "password": "test-password-123"})
+	_, other := call(t, ts, "POST", "/api/v1/auth/login", "", map[string]string{"email": "other@example.com", "password": "test-password-123", "device_name": "other", "device_kind": "desktop", "installation_id": "other-installation-id-1"})
 	_, out = call(t, ts, "GET", "/api/v1/codex/bridges", other["token"].(string), nil)
 	if len(out["bridges"].([]any)) != 0 {
 		t.Fatal("tenant leak")

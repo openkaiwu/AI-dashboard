@@ -3,6 +3,7 @@ import { scope } from "./session";
 export type ActiveProvider = "codex" | "cursor";
 
 const KEY = () => `hub_active_provider:${scope()}`;
+export function hasActiveProvider() { const v=localStorage.getItem(KEY());return v==='codex'||v==='cursor'; }
 
 export function getActiveProvider(): ActiveProvider {
   const raw = localStorage.getItem(KEY());

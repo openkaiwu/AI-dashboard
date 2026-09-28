@@ -128,15 +128,10 @@ export type Snapshot = {
 
 export const api = {
  logout:()=>request("/api/v1/auth/logout",{method:"POST"}),
-  register: (email: string, password: string, device_name: string) =>
-    request<Session>("/api/v1/auth/register", {
-      method: "POST",
-      body: JSON.stringify({ email, password, device_name }),
-    }),
   login: (email: string, password: string, device_name: string) =>
     request<Session>("/api/v1/auth/login", {
       method: "POST",
-      body: JSON.stringify({ email, password, device_name }),
+      body: JSON.stringify({ email, password, device_name, device_kind: window.aihubDesktop ? "desktop" : "web_admin", installation_id: installationID() }),
     }),
   me: () => request<{ id: string; email: string; unread_count: number }>("/api/v1/me"),
   dashboard: () => request<Dashboard>("/api/v1/dashboard"),
@@ -144,6 +139,7 @@ export const api = {
   createAccount: (body: unknown) =>
     request<Account>("/api/v1/provider-accounts", { method: "POST", body: JSON.stringify(body) }),
   getAccount: (id: string) => request<Account>(`/api/v1/provider-accounts/${id}`),
+  patchAccount:(id:string,body:unknown)=>request<{ok:boolean}>(`/api/v1/provider-accounts/${encodeURIComponent(id)}`,{method:"PATCH",body:JSON.stringify(body)}),
   deleteAccount: (id: string) =>
     request<{ ok: boolean }>(`/api/v1/provider-accounts/${id}`, { method: "DELETE" }),
   manualSnapshot: (id: string, body: unknown) =>
@@ -164,5 +160,12 @@ export const api = {
   notifications: () => request<{ notifications: NotificationItem[] }>("/api/v1/notifications"),
   readNotification: (id: string) =>
     request<{ ok: boolean }>(`/api/v1/notifications/${id}/read`, { method: "POST" }),
+  notificationAction: (id: string, action: "read"|"snooze"|"dismiss") => request<{ok:boolean}>(`/api/v1/notifications/${encodeURIComponent(id)}/action`,{method:"POST",body:JSON.stringify({action})}),
   readAll: () => request<{ ok: boolean }>("/api/v1/notifications/read-all", { method: "POST" }),
 };
+
+function installationID(): string {
+  let id = localStorage.getItem("hub_installation_id");
+  if (!id) { id = crypto.randomUUID(); localStorage.setItem("hub_installation_id", id); }
+  return id;
+}

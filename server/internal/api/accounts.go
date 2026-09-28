@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"math"
 	"net/http"
 	"strings"
 
@@ -168,6 +169,10 @@ func (s *Server) createAccount(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Quota != nil {
 		if err := insertBucketTx(ctx, tx, acctID, entID, *req.Quota, now); err != nil {
+			if err == errBadQuota {
+				httpx.Error(w, http.StatusBadRequest, "invalid_quota", "额度数值无效")
+				return
+			}
 			if err == errBadTime {
 				httpx.Error(w, http.StatusBadRequest, "invalid_input", "时间格式需要 RFC3339")
 				return
@@ -234,6 +239,10 @@ func (s *Server) createBucket(w http.ResponseWriter, r *http.Request) {
 	_ = s.db.QueryRowContext(r.Context(), `SELECT id FROM entitlements WHERE provider_account_id = $1 ORDER BY created_at DESC LIMIT 1`, acctID).Scan(&entID)
 	now := s.nowRFC()
 	if err := insertBucketTx(r.Context(), s.db, acctID, nullStr(entID), req, now); err != nil {
+		if err == errBadQuota {
+			httpx.Error(w, http.StatusBadRequest, "invalid_quota", "额度数值无效")
+			return
+		}
 		if err == errBadTime {
 			httpx.Error(w, http.StatusBadRequest, "invalid_input", "时间格式需要 RFC3339")
 			return
@@ -246,8 +255,16 @@ func (s *Server) createBucket(w http.ResponseWriter, r *http.Request) {
 }
 
 var errBadTime = errors.New("bad time")
+var errBadQuota = errors.New("bad quota")
+
+func quotaNumber(value *float64, max float64) bool {
+	return value == nil || (!math.IsNaN(*value) && !math.IsInf(*value, 0) && *value >= 0 && *value <= max)
+}
 
 func insertBucketTx(ctx context.Context, tx execer, acctID, entID string, q quotaInput, now string) error {
+	if !quotaNumber(q.LimitValue, 1e15) || !quotaNumber(q.RemainingValue, 1e15) || !quotaNumber(q.RemainingRatio, 1) || len(q.Note) > 300 || (q.RollingWindowSeconds != nil && (*q.RollingWindowSeconds <= 0 || *q.RollingWindowSeconds > 31536000)) {
+		return errBadQuota
+	}
 	resetAt, err := parseTimePtr(q.ResetAt)
 	if err != nil {
 		return errBadTime

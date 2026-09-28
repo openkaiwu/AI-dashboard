@@ -49,9 +49,9 @@ class _HubHomeState extends State<HubHome> with WidgetsBindingObserver {
   final vault = const FlutterSecureStorage();
   Timer? timer;
   String? error;
-  bool busy = false, register = false;
+  bool busy = false;
   int tab = 0;
-  String uiMode = 'codex';
+  String uiMode = 'choose';
   final email = TextEditingController(),
       password = TextEditingController(),
       deviceName = TextEditingController(text: '我的手机');
@@ -130,11 +130,11 @@ class _HubHomeState extends State<HubHome> with WidgetsBindingObserver {
     engine = api!.session == null
         ? null
         : SyncEngine(
-            store!, '${profile['url']}|${api!.session!['user']['id']}', api!);
+            store!, '${profile['url']}|${api!.session!['user']['id']}|${api!.session!['device_id']}', api!);
     state = engine == null ? LocalState() : await engine!.state();
     devices = [];
-    final savedMode = await vault.read(key: 'uiMode:${profile['id']}');
-    uiMode = savedMode == 'cursor' ? 'cursor' : 'codex';
+    final savedMode = await vault.read(key: 'uiMode:${profile['id']}:${session?['user']?['id']}:${session?['device_id']}');
+    uiMode = savedMode == 'cursor' || savedMode == 'codex' ? savedMode! : 'choose';
     if (mounted) setState(() => error = null);
     if (engine != null) {
       unawaited(sync());
@@ -144,7 +144,7 @@ class _HubHomeState extends State<HubHome> with WidgetsBindingObserver {
 
   Future<void> switchUiMode(String mode) async {
     setState(() => uiMode = mode);
-    await vault.write(key: 'uiMode:${selected?['id'] ?? 'default'}', value: mode);
+    await vault.write(key: 'uiMode:${selected?['id'] ?? 'default'}:${api?.session?['user']?['id']}:${api?.session?['device_id']}', value: mode);
   }
 
   Future<void> pollStrongNotifications() async {
@@ -161,7 +161,7 @@ class _HubHomeState extends State<HubHome> with WidgetsBindingObserver {
           );
       if (next == null || !mounted) return;
       final id = next['id'] as String;
-      final scope = '${selected!['url']}|${api!.session!['user']['id']}';
+      final scope = '${selected!['url']}|${api!.session!['user']['id']}|${api!.session!['device_id']}';
       final seenKey = 'strong-seen:$scope:$id';
       if (await vault.read(key: seenKey) != null) return;
       final slug = next['provider_slug'] as String?;
@@ -181,9 +181,12 @@ class _HubHomeState extends State<HubHome> with WidgetsBindingObserver {
         ),
       );
       if (action == 'read') {
-        await api!.call('POST', '/api/v1/notifications/${Uri.encodeComponent(id)}/read');
+        await api!.call('POST', '/api/v1/notifications/${Uri.encodeComponent(id)}/action', {'action':'read'});
       }
-      if (action == 'read' || action == 'later') {
+      if (action == 'later') {
+        await api!.call('POST', '/api/v1/notifications/${Uri.encodeComponent(id)}/action', {'action':'snooze'});
+      }
+      if (action == 'read') {
         await vault.write(key: seenKey, value: id);
       }
     } catch (_) {}
@@ -217,12 +220,17 @@ class _HubHomeState extends State<HubHome> with WidgetsBindingObserver {
       error = null;
     });
     try {
-      await api!
-          .signIn(email.text.trim(), password.text, deviceName.text, register);
+      var installationId = await vault.read(key: 'installation_id');
+      if (installationId == null) {
+        installationId = const Uuid().v4();
+        await vault.write(key: 'installation_id', value: installationId);
+      }
+      await api!.signIn(email.text.trim(), password.text, deviceName.text, installationId);
       password.clear();
       engine = SyncEngine(
-          store!, '${selected!['url']}|${api!.session!['user']['id']}', api!);
+          store!, '${selected!['url']}|${api!.session!['user']['id']}|${api!.session!['device_id']}', api!);
       state = await engine!.state();
+      uiMode = 'choose';
       tab = 0;
     } catch (e) {
       error = '$e';
@@ -507,21 +515,7 @@ class _HubHomeState extends State<HubHome> with WidgetsBindingObserver {
                   title: Text(
                       '${d['name']}${d['current'] == true ? ' · 此设备' : ''}'),
                   subtitle: Text(d['revoked_at'] == null ? '已授权' : '已撤销'),
-                  trailing: TextButton(
-                      onPressed: d['current'] == true || d['revoked_at'] != null
-                          ? null
-                          : () async {
-                              if (await confirm('撤销该设备的访问权限？')) {
-                                try {
-                                  await api!.call(
-                                      'DELETE', '/api/v1/devices/${d['id']}');
-                                  await loadDevices();
-                                } catch (e) {
-                                  setState(() => error = '$e');
-                                }
-                              }
-                            },
-                      child: const Text('撤销')))),
+                  trailing: Text(d['kind'] == 'desktop' ? '电脑' : d['kind'] == 'mobile' ? '手机' : '旧设备'))),
       ]);
 
   Widget serverPage() => ListView(padding: const EdgeInsets.all(20), children: [
@@ -572,16 +566,29 @@ class _HubHomeState extends State<HubHome> with WidgetsBindingObserver {
                   ? null
                   : () async {
                       try {
+                        final pending = state.pending.length + state.conflicts.length;
+                        if (pending > 0) {
+                          final discard = await showDialog<bool>(context: context, builder: (ctx) => AlertDialog(title: const Text('仍有本地修改'), content: Text('有 $pending 条修改或冲突尚未处理。退出将清除本机副本。'), actions: [TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('返回')), TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('清除并退出'))]));
+                          if (discard != true) return;
+                        }
+                        final current = api!.session!;
+                        final currentScope = '${selected!['url']}|${current['user']['id']}|${current['device_id']}';
                         await api!.call('POST', '/api/v1/auth/logout');
+                        await store!.clearScope(currentScope);
+                        for (final key in (await vault.readAll()).keys) {
+                          if (key.startsWith('strong-seen:$currentScope:')) await vault.delete(key: key);
+                        }
                         await vault.delete(key: 'session:${selected!['id']}');
                         api!.session = null;
                         engine = null;
+                        state = LocalState();
+                        uiMode = 'choose';
                         setState(() {});
                       } catch (e) {
                         setState(() => error = '$e');
                       }
                     },
-              child: const Text('退出并撤销此设备')),
+              child: const Text('退出账户')),
       ]);
 
   Widget login() => ListView(padding: const EdgeInsets.all(20), children: [
@@ -600,7 +607,7 @@ class _HubHomeState extends State<HubHome> with WidgetsBindingObserver {
                     color: HubTheme.muted,
                     fontWeight: FontWeight.w600)),
             const SizedBox(height: 16),
-            Text(register ? '建立工作空间' : '连接你的工作空间',
+            Text('连接你的工作空间',
                 style: Theme.of(context).textTheme.headlineSmall),
             const SizedBox(height: 8),
             Text('服务器：${selected?['name'] ?? '未选择'} · ${selected?['url'] ?? ''}'),
@@ -622,10 +629,8 @@ class _HubHomeState extends State<HubHome> with WidgetsBindingObserver {
               const SizedBox(height: 20),
               FilledButton(
                   onPressed: busy ? null : signIn,
-                  child: Text(register ? '创建账户 ↗' : '进入工作空间 ↗')),
-              TextButton(
-                  onPressed: () => setState(() => register = !register),
-                  child: Text(register ? '已有账户？登录' : '没有账户？注册')),
+                  child: const Text('进入工作空间 ↗')),
+              const Text('账户由管理员授权；换机请先联系管理员解绑。'),
             ] else
               FilledButton(
                   onPressed: () => editProfile(),
@@ -646,19 +651,37 @@ class _HubHomeState extends State<HubHome> with WidgetsBindingObserver {
       );
     }
     if (tab == 0) {
+      if (uiMode == 'choose') {
+        return ListView(padding: const EdgeInsets.all(20), children: [
+          Text('选择工作模式', style: Theme.of(context).textTheme.headlineMedium),
+          const SizedBox(height: 10),
+          const Text('查看 Codex 或 Cursor；后台采集与提醒不随页面切换停止。'),
+          const SizedBox(height: 20),
+          for (final mode in ['codex','cursor']) Card(child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(mode == 'codex' ? 'Codex' : 'Cursor', style: Theme.of(context).textTheme.titleLarge),
+              const SizedBox(height: 8),
+              Text(mode == 'codex' ? '额度、使用计划、提醒与重置雷达' : '实际用量、提醒与重置时间'),
+              const SizedBox(height: 12),
+              FilledButton(onPressed: () => unawaited(switchUiMode(mode)), child: Text('进入 ${mode == 'codex' ? 'Codex' : 'Cursor'} 模式')),
+            ]),
+          )),
+        ]);
+      }
       if (uiMode == 'cursor') {
         return Padding(
           padding: const EdgeInsets.fromLTRB(20, 12, 20, 0),
-          child: CursorPage(key: ValueKey('cursor|${selected!['url']}'), api: api!),
+          child: CursorPage(key: ValueKey('cursor|${selected!['url']}|${api!.session!['user']['id']}|${api!.session!['device_id']}'), api: api!),
         );
       }
       return Padding(
         padding: const EdgeInsets.fromLTRB(20, 12, 20, 0),
         child: CodexPage(
-          key: ValueKey('${selected!['url']}|${api!.session!['user']['id']}'),
+          key: ValueKey('${selected!['url']}|${api!.session!['user']['id']}|${api!.session!['device_id']}'),
           api: api!,
           store: store!,
-          scope: '${selected!['url']}|${api!.session!['user']['id']}',
+          scope: '${selected!['url']}|${api!.session!['user']['id']}|${api!.session!['device_id']}',
         ),
       );
     }
@@ -686,7 +709,7 @@ class _HubHomeState extends State<HubHome> with WidgetsBindingObserver {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 const Text('AI Hub', style: TextStyle(fontSize: 16)),
-                Text(uiMode == 'cursor' ? 'Cursor 额度助手' : 'Codex 使用助手',
+                Text(uiMode == 'cursor' ? 'Cursor 额度助手' : uiMode == 'codex' ? 'Codex 使用助手' : '选择工作模式',
                     style: const TextStyle(fontSize: 11, color: HubTheme.muted)),
               ],
             ),
@@ -698,6 +721,7 @@ class _HubHomeState extends State<HubHome> with WidgetsBindingObserver {
                 initialValue: uiMode,
                 onSelected: (v) => unawaited(switchUiMode(v)),
                 itemBuilder: (context) => const [
+                  PopupMenuItem(value: 'choose', child: Text('选择工作模式')),
                   PopupMenuItem(value: 'codex', child: Text('Codex 模式')),
                   PopupMenuItem(value: 'cursor', child: Text('Cursor 模式')),
                 ],

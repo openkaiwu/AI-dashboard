@@ -53,8 +53,8 @@ func TestCursorSnapshotWritesGenericQuota(t *testing.T) {
 	}
 	sample["access_token"] = "must-not-upload"
 	code, _ = call(t, ts, "POST", "/api/v1/cursor/snapshot", token, sample)
-	if code != 200 {
-		t.Fatal("sanitized upload rejected")
+	if code != 400 {
+		t.Fatal("unknown secret field accepted")
 	}
 	code, dash = call(t, ts, "GET", "/api/v1/dashboard", at, nil)
 	for _, raw := range dash["accounts"].([]any) {
