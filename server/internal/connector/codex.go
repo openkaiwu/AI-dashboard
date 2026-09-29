@@ -27,13 +27,17 @@ func (s *Service) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id, token := httpx.NewID("bridge"), httpx.Token()
-	result, e := s.DB.ExecContext(r.Context(), `INSERT INTO codex_bridges(id,user_id,name,token_hash,device_id) SELECT $1,d.user_id,$2,$3,d.id FROM devices d JOIN users u ON u.id=d.user_id WHERE d.id=$4 AND d.kind='desktop' AND d.revoked_at IS NULL AND u.account_status='active'`, id, strings.TrimSpace(q.Name), auth.Hash(token), auth.Who(r).DeviceID)
+	uid, e := auth.DesktopDeviceUser(r.Context(), s.DB, auth.Who(r).DeviceID)
+	if errors.Is(e, sql.ErrNoRows) {
+		httpx.Error(w, 403, "desktop_required", "请在已绑定的桌面设备创建连接")
+		return
+	}
 	if e != nil {
 		httpx.Error(w, 503, "unavailable", "无法创建连接")
 		return
 	}
-	if n, _ := result.RowsAffected(); n != 1 {
-		httpx.Error(w, 403, "desktop_required", "请在已绑定的桌面设备创建连接")
+	if _, e := s.DB.ExecContext(r.Context(), `INSERT INTO codex_bridges(id,user_id,name,token_hash,device_id) VALUES($1,$2,$3,$4,$5)`, id, uid, strings.TrimSpace(q.Name), auth.Hash(token), auth.Who(r).DeviceID); e != nil {
+		httpx.Error(w, 503, "unavailable", "无法创建连接")
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
@@ -73,14 +77,22 @@ func (s *Service) Upload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback()
-	var id string
+	var bridgeID, deviceID string
 	var old []byte
-	e = tx.QueryRowContext(r.Context(), `SELECT b.id,b.snapshot FROM codex_bridges b JOIN devices d ON d.id=b.device_id JOIN users u ON u.id=b.user_id WHERE b.token_hash=$1 AND b.revoked_at IS NULL AND d.revoked_at IS NULL AND d.kind='desktop' AND u.account_status='active' FOR UPDATE OF b`, auth.Hash(strings.TrimPrefix(header, "Bearer "))).Scan(&id, &old)
+	e = tx.QueryRowContext(r.Context(), `SELECT b.id,b.device_id,b.snapshot FROM codex_bridges b WHERE b.token_hash=$1 AND b.revoked_at IS NULL FOR UPDATE`, auth.Hash(strings.TrimPrefix(header, "Bearer "))).Scan(&bridgeID, &deviceID, &old)
 	if errors.Is(e, sql.ErrNoRows) {
 		httpx.Error(w, 401, "bridge_revoked", "连接已撤销，请重新配对")
 		return
 	}
 	if e != nil {
+		httpx.Error(w, 503, "unavailable", "服务暂不可用")
+		return
+	}
+	if e := auth.EnsureActiveDesktopDevice(r.Context(), tx, deviceID); e != nil {
+		if errors.Is(e, sql.ErrNoRows) {
+			httpx.Error(w, 401, "bridge_revoked", "连接已撤销，请重新配对")
+			return
+		}
 		httpx.Error(w, 503, "unavailable", "服务暂不可用")
 		return
 	}
@@ -95,12 +107,12 @@ func (s *Service) Upload(w http.ResponseWriter, r *http.Request) {
 	applied := len(old) == 0 || q.ObservedAt.After(previous.ObservedAt)
 	if applied {
 		raw, _ := json.Marshal(q)
-		_, e = tx.ExecContext(r.Context(), `UPDATE codex_bridges SET snapshot=$1,received_at=now() WHERE id=$2`, raw, id)
+		_, e = tx.ExecContext(r.Context(), `UPDATE codex_bridges SET snapshot=$1,received_at=now() WHERE id=$2`, raw, bridgeID)
 		if e == nil {
-			_, e = tx.ExecContext(r.Context(), `INSERT INTO codex_history(bridge_id,observed_at,snapshot) VALUES($1,$2,$3) ON CONFLICT DO NOTHING`, id, q.ObservedAt, raw)
+			_, e = tx.ExecContext(r.Context(), `INSERT INTO codex_history(bridge_id,observed_at,snapshot) VALUES($1,$2,$3) ON CONFLICT DO NOTHING`, bridgeID, q.ObservedAt, raw)
 		}
 		if e == nil {
-			_, e = tx.ExecContext(r.Context(), `DELETE FROM codex_history WHERE bridge_id=$1 AND observed_at<now()-interval '7 days'`, id)
+			_, e = tx.ExecContext(r.Context(), `DELETE FROM codex_history WHERE bridge_id=$1 AND observed_at<now()-interval '7 days'`, bridgeID)
 		}
 	}
 	if e == nil {

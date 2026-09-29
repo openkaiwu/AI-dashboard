@@ -29,8 +29,12 @@ func (s *Service) SampleUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var uid, device string
-	err := s.DB.QueryRowContext(r.Context(), `SELECT b.user_id,b.device_id FROM codex_bridges b JOIN devices d ON d.id=b.device_id JOIN users u ON u.id=b.user_id WHERE b.token_hash=$1 AND b.revoked_at IS NULL AND d.revoked_at IS NULL AND d.kind='desktop' AND u.account_status='active'`, auth.Hash(strings.TrimPrefix(header, "Bearer "))).Scan(&uid, &device)
+	err := s.DB.QueryRowContext(r.Context(), `SELECT b.user_id,b.device_id FROM codex_bridges b WHERE b.token_hash=$1 AND b.revoked_at IS NULL`, auth.Hash(strings.TrimPrefix(header, "Bearer "))).Scan(&uid, &device)
 	if err != nil {
+		httpx.Error(w, 401, "bridge_revoked", "连接已撤销")
+		return
+	}
+	if err := auth.EnsureActiveDesktopDevice(r.Context(), s.DB, device); err != nil {
 		httpx.Error(w, 401, "bridge_revoked", "连接已撤销")
 		return
 	}

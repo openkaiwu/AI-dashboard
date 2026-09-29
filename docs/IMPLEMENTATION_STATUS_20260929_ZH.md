@@ -22,6 +22,7 @@
 
 ## 本地验证记录
 
+- 2026-09-29：修复 connector 包直接查询 `devices` 表违反 M0 冻结边界的问题；桌面设备校验收敛到 `auth.DesktopDeviceUser` / `auth.EnsureActiveDesktopDevice`，connector 只查自身的 `codex_bridges`。修复后官方 `scripts/gate.sh` 完整通过（边界检查、Go `-race`、真实 PostgreSQL 服务端、Flutter 分析与测试），预置账户后含真实服务器联测共 **12 项全部通过、0 跳过**。
 - 服务端 Go 单元和 API 集成测试、Web 构建及 Electron 主进程测试已在 M1/M2 开发阶段通过；详见 [M1/M2 实施记录](M1_M2_IMPLEMENTATION_20260928_ZH.md)。
 - 安卓 Flutter 静态分析通过；测试 **10 项通过、2 项跳过**。跳过项需要预置真实服务器账户。
 - Android `0.3.0+2` Release APK 已构建并完成签名校验，文件位于 `artifacts/android-native/aihub-mobile.apk`。该文件使用调试签名，不能作为应用商店发布包。
