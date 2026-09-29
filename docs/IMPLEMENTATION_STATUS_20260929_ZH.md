@@ -37,6 +37,7 @@
 
 ## 相关文档
 
+- [本地完成进度总览](PROGRESS_20260929_ZH.md)（M0–M6 逐票状态与验证记录）
 - [M1/M2 与设备绑定实施记录](M1_M2_IMPLEMENTATION_20260928_ZH.md)
 - [Android 功能对齐与本地验证](ANDROID_PARITY_20260928_ZH.md)
 - [设备绑定规则](DEVICE_BINDING_1TO1_ZH.md)
