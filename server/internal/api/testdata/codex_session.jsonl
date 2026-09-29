@@ -1,0 +1,3 @@
+{"timestamp":"2026-09-29T01:00:00Z","type":"response_item","payload":{"role":"user","content":[{"type":"input_text","text":"帮我写个脚本"}]}}
+{"timestamp":"2026-09-29T01:00:10Z","type":"response_item","payload":{"role":"assistant","content":[{"type":"output_text","text":"好的，这是脚本。"}]}}
+{"timestamp":"2026-09-29T01:00:11Z","type":"event_msg","payload":{"type":"token_count","text":"ignored"}}

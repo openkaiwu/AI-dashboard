@@ -106,3 +106,27 @@ Enqueue inside the domain transaction. Claim uses FOR UPDATE SKIP LOCKED.
 Lease expiry makes crashed work claimable again. Every claim gets a new lease token.
 Acknowledgement checks id + lease token + unexpired lease; an old worker cannot acknowledge a new claim.
 Delivery is at-least-once. Future external workers must make their side effects idempotent.
+
+## Conversation portability v1 (M3, 2026-09-29)
+
+Canonical graph: projects → conversations → branches → messages. A message's parent chain stays inside its branch; the branch root has no parent. Append-only: identical re-imports dedup, changed content appends new branches, history rows are never rewritten.
+
+Dedup identity: UNIQUE(user_id, provider_slug, dedup_key). dedup_key is the source external id when provided, else the first 24 hex of the content hash (ordered branch/role/content triples), so archive round-trips dedup without server ids.
+
+Sources v1: chatgpt_export (node-graph JSON), codex_cli_jsonl (tolerant line format, foreign lines skipped), archive (aihub.conversation-archive v1 envelope with frozen format/version/projects/conversations fields). New fields require a version bump, not reinterpretation.
+
+v1 limits: import file ≤ 900KiB (inside the global 1MiB Guard), ≤ 50 conversations per batch, ≤ 20 branches and ≤ 4000 messages per conversation, ≤ 64KiB per message. Raising these is an ADR + object-storage decision (INH-442), not a silent relaxation.
+
+Raw provenance: the exact uploaded bytes are retained per import and served only to the owning account; raw payloads never enter sync push/pull. Imports run through the durable job queue (kind conversation_import), API returns 202, status is polled, and each batch commits in one transaction — no partial imports. Markdown export is a rendering convenience, not a round-trip format.
+
+## Portable config v1 (M4, 2026-09-29)
+
+Asset kinds v1: mcp_server, prompt_template, agent_profile. Canonical content shapes are frozen: mcp_server requires a non-empty mcp_servers[] whose entries carry name and command|url; prompt_template requires body; agent_profile requires instructions.
+
+Versions are append-only (UNIQUE(asset_id, version)); rollback appends a new version with the old content (created_by=rollback). History rows are never mutated.
+
+Secrets: values under key names matching token/secret/password/api_key/authorization/cookie/private_key/credential are replaced by {"secret_ref":"env:NAME"} at import/create time; the value is discarded and only the NAME survives. Loss reports record path+reason, never values. No API response, export or sync payload may contain a secret value — regression-tested.
+
+Reference transform v1: claude_desktop JSON → canonical → codex_cli TOML fragment. Secret refs render as ${NAME} placeholders with explicit loss entries; unknown fields are recorded, never silently dropped. Additional platforms and the reverse TOML parser are INH-473. Bindings are declarative targets only; file writes stay with the desktop bridge.
+
+Bridge config discovery scans only explicitly authorized absolute directories (scan_directories, ≤8 entries), whitelisted filenames, ≤3 depth, ≤500 files, ≤256KiB per file, and uploads metadata plus secret KEY NAMES only — file contents and values never leave the machine. Config import content is capped at 256KiB in-handler.

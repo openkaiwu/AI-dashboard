@@ -4,6 +4,7 @@ import (
 	"aihub.dev/server/internal/api"
 	"aihub.dev/server/internal/clock"
 	"aihub.dev/server/internal/config"
+	"aihub.dev/server/internal/conversation"
 	"aihub.dev/server/internal/db"
 	"context"
 	"log/slog"
@@ -63,6 +64,7 @@ func main() {
 				if e := app.EvaluateNotificationsAll(ctx); e != nil {
 					slog.Error("rule evaluation failed")
 				}
+				conversation.ProcessImports(ctx, database)
 			}
 		}
 	}()

@@ -15,6 +15,8 @@ import (
 
 	"aihub.dev/server/internal/auth"
 	"aihub.dev/server/internal/clock"
+	"aihub.dev/server/internal/config"
+	"aihub.dev/server/internal/conversation"
 	"aihub.dev/server/internal/connector"
 	"aihub.dev/server/internal/httpx"
 	"aihub.dev/server/internal/provider"
@@ -58,6 +60,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/codex/snapshot", bridgeService.Upload)
 	mux.HandleFunc("POST /api/v1/cursor/snapshot", bridgeService.UploadCursor)
 	mux.HandleFunc("POST /api/v1/connectors/sample", bridgeService.SampleUpload)
+	mux.HandleFunc("POST /api/v1/bridge/config-scan", bridgeService.ConfigScan)
 	mux.HandleFunc("GET /ready", s.health)
 	mux.HandleFunc("GET /api/v1/meta", func(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteJSON(w, 200, map[string]any{"protocol": 1, "schema": 1, "version": "0.2.0-m0"})
@@ -115,6 +118,36 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/notifications/{id}/read", s.authed(s.readNotification))
 	mux.Handle("POST /api/v1/notifications/{id}/action", s.authed(s.notificationAction))
 	mux.Handle("POST /api/v1/notifications/read-all", s.authed(s.readAllNotifications))
+
+	// M3 conversation portability.
+	conversationService := &conversation.Service{DB: s.db}
+	mux.Handle("POST /api/v1/projects", authService.Middleware(conversationService.CreateProject))
+	mux.Handle("GET /api/v1/projects", authService.Middleware(conversationService.ListProjects))
+	mux.Handle("DELETE /api/v1/projects/{id}", authService.Middleware(conversationService.DeleteProject))
+	mux.Handle("POST /api/v1/conversations/import", authService.Middleware(conversationService.Import))
+	mux.Handle("GET /api/v1/conversations", authService.Middleware(conversationService.ListConversations))
+	mux.Handle("GET /api/v1/conversations/{id}", authService.Middleware(conversationService.GetConversation))
+	mux.Handle("PATCH /api/v1/conversations/{id}", authService.Middleware(conversationService.PatchConversation))
+	mux.Handle("DELETE /api/v1/conversations/{id}", authService.Middleware(conversationService.DeleteConversation))
+	mux.Handle("GET /api/v1/conversations/{id}/export", authService.Middleware(conversationService.ExportConversation))
+	mux.Handle("GET /api/v1/imports", authService.Middleware(conversationService.ListImports))
+	mux.Handle("GET /api/v1/imports/{id}", authService.Middleware(conversationService.ImportStatus))
+	mux.Handle("GET /api/v1/imports/{id}/raw", authService.Middleware(conversationService.ImportRaw))
+
+	// M4 portable config.
+	configService := &config.Service{DB: s.db}
+	mux.Handle("POST /api/v1/config-assets/import", authService.Middleware(configService.ImportFromPlatform))
+	mux.Handle("POST /api/v1/config-assets", authService.Middleware(configService.Create))
+	mux.Handle("GET /api/v1/config-assets", authService.Middleware(configService.List))
+	mux.Handle("GET /api/v1/config-assets/{id}", authService.Middleware(configService.Get))
+	mux.Handle("PATCH /api/v1/config-assets/{id}", authService.Middleware(configService.Patch))
+	mux.Handle("DELETE /api/v1/config-assets/{id}", authService.Middleware(configService.Delete))
+	mux.Handle("POST /api/v1/config-assets/{id}/versions", authService.Middleware(configService.AddVersion))
+	mux.Handle("GET /api/v1/config-assets/{id}/diff", authService.Middleware(configService.Diff))
+	mux.Handle("POST /api/v1/config-assets/{id}/rollback", authService.Middleware(configService.Rollback))
+	mux.Handle("POST /api/v1/config-assets/{id}/transform", authService.Middleware(configService.TransformPreview))
+	mux.Handle("POST /api/v1/config-assets/{id}/bindings", authService.Middleware(configService.CreateBinding))
+	mux.Handle("GET /api/v1/config-discoveries", authService.Middleware(configService.ListDiscoveries))
 
 	if s.dist != "" {
 		if _, err := os.Stat(s.dist); err == nil {

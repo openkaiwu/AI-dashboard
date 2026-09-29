@@ -126,6 +126,14 @@ export type Snapshot = {
   source_type: string;
 };
 
+// requestRaw exchanges raw bytes (conversation imports/exports) with Bearer auth.
+export async function requestRaw(path:string,init:RequestInit={}):Promise<Response>{
+ const p=profile();const session=getSession(p);
+ const headers=new Headers(init.headers);
+ if(session)headers.set("Authorization","Bearer "+session.token);
+ return fetch(p.url+path,{...init,headers,redirect:"error"});
+}
+
 export const api = {
  logout:()=>request("/api/v1/auth/logout",{method:"POST"}),
   login: (email: string, password: string, device_name: string) =>

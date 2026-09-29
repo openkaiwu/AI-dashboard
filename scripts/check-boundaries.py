@@ -6,7 +6,11 @@ allowed = {
  'sync': {'auth','db','httpx'},
  'jobs': {'httpx'},
  'audit': set(), 'db': set(), 'httpx': set(),
- 'quota': set(), 'notification': {'quota'}, 'provider': set(), 'connector': {'auth','codex','cursor','httpx','quota'}, 'codex': set(), 'cursor': set(),
+ 'quota': set(), 'notification': {'quota'}, 'provider': set(),
+ 'connector': {'auth','codex','cursor','httpx','quota','config'},
+ 'codex': set(), 'cursor': set(),
+ 'conversation': {'auth','db','httpx','jobs'},
+ 'config': {'auth','db','httpx'},
 }
 errors=[]
 for p in (root/'internal').rglob('*.go'):
@@ -19,5 +23,7 @@ for p in (root/'internal').rglob('*.go'):
   tables=set(re.findall(r'\b(?:INTO|UPDATE|FROM|JOIN)\s+([a-z_]+)',sql,re.I))
   if tables & {'sync_notes','sync_events','sync_streams','applied_operations'} and owner!='sync': errors.append(f'{p}: sync ownership')
   if tables & {'devices','sessions'} and owner!='auth': errors.append(f'{p}: auth ownership')
+  if tables & {'projects','conversations','conversation_branches','conversation_messages','conversation_imports','conversation_raw_snapshots'} and owner!='conversation': errors.append(f'{p}: conversation ownership')
+  if tables & {'config_assets','config_versions','config_bindings','config_discoveries'} and owner!='config': errors.append(f'{p}: config ownership')
 if errors: raise SystemExit('\n'.join(errors))
 print('Module dependencies and auth/sync table ownership: PASS')

@@ -22,11 +22,12 @@ import (
 )
 
 type config struct {
-	Server          string `json:"server"`
-	Token           string `json:"token"`
-	CodexPath       string `json:"codex_path"`
-	CursorEnabled   *bool  `json:"cursor_enabled"`
-	IntervalSeconds int    `json:"interval_seconds"`
+	Server          string   `json:"server"`
+	Token           string   `json:"token"`
+	CodexPath       string   `json:"codex_path"`
+	CursorEnabled   *bool    `json:"cursor_enabled"`
+	IntervalSeconds int      `json:"interval_seconds"`
+	ScanDirectories []string `json:"scan_directories"`
 }
 
 func validServer(raw string) bool {
@@ -89,6 +90,15 @@ func run() error {
 	if cfg.IntervalSeconds < 300 {
 		cfg.IntervalSeconds = 300
 	}
+	if len(cfg.ScanDirectories) > 8 {
+		cfg.ScanDirectories = cfg.ScanDirectories[:8]
+	}
+	for i, dir := range cfg.ScanDirectories {
+		if !filepath.IsAbs(dir) {
+			return errors.New("scan_directories entries must be absolute paths")
+		}
+		cfg.ScanDirectories[i] = filepath.Clean(dir)
+	}
 	client := &http.Client{Timeout: 20 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
@@ -114,6 +124,9 @@ func run() error {
 		}
 		if cursorEnabled(cfg) && (*once || !time.Now().Before(next[provider.SlugCursor])) {
 			update(provider.SlugCursor, uploadCursor(ctx, client, cfg, *path, *once))
+		}
+		if len(cfg.ScanDirectories) > 0 && (*once || !time.Now().Before(next["config_scan"])) {
+			update("config_scan", uploadConfigScan(ctx, client, cfg, *once))
 		}
 		if *once {
 			return nil
@@ -155,6 +168,34 @@ func uploadCursor(ctx context.Context, client *http.Client, cfg config, configPa
 	return postSnapshot(ctx, client, cfg, provider.SlugCursor, payload, once, func() string {
 		return fmt.Sprintf("cursor synced: status=%s", sample.Status)
 	})
+}
+
+// uploadConfigScan posts the sanitized discovery manifest for authorized directories.
+func uploadConfigScan(ctx context.Context, client *http.Client, cfg config, once bool) bool {
+	entries := collectConfigScan(cfg.ScanDirectories)
+	payload, _ := json.Marshal(map[string]any{"entries": entries})
+	req, e := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(cfg.Server, "/")+"/api/v1/bridge/config-scan", bytes.NewReader(payload))
+	if e != nil {
+		return false
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+cfg.Token)
+	response, e := client.Do(req)
+	if e != nil {
+		fmt.Println("config scan upload unavailable; will retry next interval")
+		return false
+	}
+	io.Copy(io.Discard, io.LimitReader(response.Body, 4096))
+	response.Body.Close()
+	if response.StatusCode == 401 || response.StatusCode == 403 {
+		fmt.Fprintln(os.Stderr, "bridge authorization revoked; create a new connection")
+		os.Exit(1)
+	}
+	if response.StatusCode != 200 {
+		return false
+	}
+	fmt.Printf("%s config-scan synced: entries=%d\n", time.Now().UTC().Format(time.RFC3339), len(entries))
+	return true
 }
 
 func postSnapshot(ctx context.Context, client *http.Client, cfg config, slug string, payload []byte, once bool, okLine func() string) bool {
