@@ -19,8 +19,10 @@ import (
 	"aihub.dev/server/internal/conversation"
 	"aihub.dev/server/internal/connector"
 	"aihub.dev/server/internal/httpx"
+	"aihub.dev/server/internal/promotion"
 	"aihub.dev/server/internal/provider"
 	syncservice "aihub.dev/server/internal/sync"
+	"aihub.dev/server/internal/workspace"
 )
 
 type ctxKey string
@@ -119,8 +121,16 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/notifications/{id}/action", s.authed(s.notificationAction))
 	mux.Handle("POST /api/v1/notifications/read-all", s.authed(s.readAllNotifications))
 
+	// M5 workspace & collaboration + M6 promotion intelligence.
+	hub := workspace.NewHub()
+	workspaceService := &workspace.Service{DB: s.db}
+	workspaceService.UseHub(hub)
+	promotionService := &promotion.Service{DB: s.db, Notify: s.promotionNotify}
+
 	// M3 conversation portability.
-	conversationService := &conversation.Service{DB: s.db}
+	conversationService := &conversation.Service{DB: s.db, OnShare: func(ctx context.Context, userID, resourceID, wsID string) error {
+		return workspaceService.SetResourceWorkspace(ctx, userID, userID, wsID, "conversation", resourceID)
+	}}
 	mux.Handle("POST /api/v1/projects", authService.Middleware(conversationService.CreateProject))
 	mux.Handle("GET /api/v1/projects", authService.Middleware(conversationService.ListProjects))
 	mux.Handle("DELETE /api/v1/projects/{id}", authService.Middleware(conversationService.DeleteProject))
@@ -135,7 +145,9 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/imports/{id}/raw", authService.Middleware(conversationService.ImportRaw))
 
 	// M4 portable config.
-	configService := &config.Service{DB: s.db}
+	configService := &config.Service{DB: s.db, OnShare: func(ctx context.Context, userID, resourceID, wsID string) error {
+		return workspaceService.SetResourceWorkspace(ctx, userID, userID, wsID, "config_asset", resourceID)
+	}}
 	mux.Handle("POST /api/v1/config-assets/import", authService.Middleware(configService.ImportFromPlatform))
 	mux.Handle("POST /api/v1/config-assets", authService.Middleware(configService.Create))
 	mux.Handle("GET /api/v1/config-assets", authService.Middleware(configService.List))
@@ -149,6 +161,29 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/config-assets/{id}/bindings", authService.Middleware(configService.CreateBinding))
 	mux.Handle("GET /api/v1/config-discoveries", authService.Middleware(configService.ListDiscoveries))
 
+	// Workspace, promotion routes (services constructed above).
+	mux.Handle("POST /api/v1/workspaces", authService.Middleware(workspaceService.Create))
+	mux.Handle("GET /api/v1/workspaces", authService.Middleware(workspaceService.List))
+	mux.Handle("GET /api/v1/workspaces/{id}/members", authService.Middleware(workspaceService.Members))
+	mux.Handle("POST /api/v1/workspaces/{id}/invites", authService.Middleware(workspaceService.Invite))
+	mux.Handle("GET /api/v1/workspaces/{id}/invites", authService.Middleware(workspaceService.ListInvites))
+	mux.Handle("POST /api/v1/invites/{id}/accept", authService.Middleware(workspaceService.AcceptInvite))
+	mux.Handle("GET /api/v1/invites/mine", authService.Middleware(workspaceService.MyInvites))
+	mux.Handle("DELETE /api/v1/invites/{id}", authService.Middleware(workspaceService.RevokeInvite))
+	mux.Handle("DELETE /api/v1/workspaces/{id}/members/{user}", authService.Middleware(workspaceService.RemoveMember))
+	mux.Handle("POST /api/v1/workspace-comments", authService.Middleware(workspaceService.CreateComment))
+	mux.Handle("GET /api/v1/workspace-comments", authService.Middleware(workspaceService.ListComments))
+	mux.Handle("GET /api/v1/change-hints", authService.Middleware(hub.Stream))
+
+	mux.Handle("GET /api/v1/promotion-sources", authService.Middleware(promotionService.ListSources))
+	mux.Handle("POST /api/v1/promotion-sources", authService.Middleware(promotionService.CreateSource))
+	mux.Handle("POST /api/v1/promotion-sources/{id}/ingest", authService.Middleware(promotionService.IngestSource))
+	mux.Handle("POST /api/v1/promotions/submit", authService.Middleware(promotionService.Submit))
+	mux.Handle("GET /api/v1/promotions", authService.Middleware(promotionService.ListFeed))
+	mux.Handle("GET /api/v1/promotion-watchlist", authService.Middleware(promotionService.ListWatchlist))
+	mux.Handle("POST /api/v1/promotion-watchlist", authService.Middleware(promotionService.CreateWatch))
+	mux.Handle("DELETE /api/v1/promotion-watchlist/{id}", authService.Middleware(promotionService.DeleteWatch))
+
 	if s.dist != "" {
 		if _, err := os.Stat(s.dist); err == nil {
 			mux.Handle("/", spaHandler(s.dist))
@@ -160,6 +195,15 @@ func (s *Server) Handler() http.Handler {
 	}
 
 	return httpx.CORS(httpx.Middleware(httpx.Guard(mux)))
+}
+
+// promotionNotify writes matched-promotion notifications; the promotion package
+// stays decoupled from the notification table via this callback.
+func (s *Server) promotionNotify(ctx context.Context, uid, title, body, dedupeKey string) error {
+	_, e := s.db.ExecContext(ctx, `INSERT INTO notifications (id,user_id,rule_id,provider_account_id,quota_bucket_id,title,body,severity,dedupe_key,status,created_at)
+		VALUES ($1,$2,NULL,NULL,NULL,$3,$4,'info',$5,'unread',$6)`,
+		httpx.NewID("ntf"), uid, title, body, dedupeKey, s.clock.Now().UTC().Format(time.RFC3339))
+	return e
 }
 
 func (s *Server) health(w http.ResponseWriter, r *http.Request) {

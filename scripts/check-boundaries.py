@@ -9,8 +9,10 @@ allowed = {
  'quota': set(), 'notification': {'quota'}, 'provider': set(),
  'connector': {'auth','codex','cursor','httpx','quota','config'},
  'codex': set(), 'cursor': set(),
- 'conversation': {'auth','db','httpx','jobs'},
- 'config': {'auth','db','httpx'},
+ 'conversation': {'auth','db','httpx','jobs','workspace'},
+ 'config': {'auth','db','httpx','workspace'},
+ 'workspace': {'auth','db','httpx','audit'},
+ 'promotion': {'auth','db','httpx'},
 }
 errors=[]
 for p in (root/'internal').rglob('*.go'):
@@ -25,5 +27,7 @@ for p in (root/'internal').rglob('*.go'):
   if tables & {'devices','sessions'} and owner!='auth': errors.append(f'{p}: auth ownership')
   if tables & {'projects','conversations','conversation_branches','conversation_messages','conversation_imports','conversation_raw_snapshots'} and owner!='conversation': errors.append(f'{p}: conversation ownership')
   if tables & {'config_assets','config_versions','config_bindings','config_discoveries'} and owner!='config': errors.append(f'{p}: config ownership')
+  if tables & {'workspaces','workspace_members','workspace_invites','workspace_comments'} and owner!='workspace': errors.append(f'{p}: workspace ownership')
+  if tables & {'promotions','promotion_sources','promotion_observations','promotion_watchlists','promotion_notifications'} and owner!='promotion': errors.append(f'{p}: promotion ownership')
 if errors: raise SystemExit('\n'.join(errors))
 print('Module dependencies and auth/sync table ownership: PASS')

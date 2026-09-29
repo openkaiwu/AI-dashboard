@@ -6,6 +6,7 @@ import (
 	"aihub.dev/server/internal/config"
 	"aihub.dev/server/internal/conversation"
 	"aihub.dev/server/internal/db"
+	"aihub.dev/server/internal/promotion"
 	"context"
 	"log/slog"
 	"net/http"
@@ -64,6 +65,7 @@ func main() {
 				if e := app.EvaluateNotificationsAll(ctx); e != nil {
 					slog.Error("rule evaluation failed")
 				}
+				promotion.ArchiveExpired(ctx, database)
 				conversation.ProcessImports(ctx, database)
 			}
 		}

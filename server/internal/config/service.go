@@ -15,11 +15,14 @@ import (
 	"aihub.dev/server/internal/auth"
 	"aihub.dev/server/internal/db"
 	"aihub.dev/server/internal/httpx"
+	"aihub.dev/server/internal/workspace"
 )
 
 // Service owns the portable config HTTP surface (M4).
 type Service struct {
 	DB *sql.DB
+	// OnShare binds/unbinds a config asset to a workspace (composition wiring).
+	OnShare func(ctx context.Context, userID, resourceID, workspaceID string) error
 }
 
 // ScanEntry is one bridge-side config discovery: metadata and secret key NAMES only.
@@ -163,7 +166,7 @@ func (s *Service) List(w http.ResponseWriter, r *http.Request) {
 	kind := strings.TrimSpace(r.URL.Query().Get("kind"))
 	query := `SELECT a.id,a.name,a.kind,a.source_platform,a.latest_version,a.created_at,a.updated_at,
 		(SELECT count(*) FROM config_bindings b WHERE b.asset_id=a.id)
-		FROM config_assets a WHERE a.user_id=$1`
+		FROM config_assets a WHERE` + workspace.ReadableScope("a", 1)
 	args := []any{auth.Who(r).UserID}
 	if kind != "" {
 		query += ` AND a.kind=$2`
@@ -200,7 +203,7 @@ func (s *Service) Get(w http.ResponseWriter, r *http.Request) {
 	var name, kind, source string
 	var latest int
 	var created, updated time.Time
-	e := s.DB.QueryRowContext(r.Context(), `SELECT name,kind,source_platform,latest_version,created_at,updated_at FROM config_assets WHERE id=$1 AND user_id=$2`, assetID, userID).
+	e := s.DB.QueryRowContext(r.Context(), `SELECT name,kind,source_platform,latest_version,created_at,updated_at FROM config_assets WHERE id=$1 AND`+workspace.ReadableScope("config_assets", 2), assetID, userID).
 		Scan(&name, &kind, &source, &latest, &created, &updated)
 	if errors.Is(e, sql.ErrNoRows) {
 		httpx.Error(w, 404, "not_found", "配置不存在")
@@ -273,22 +276,40 @@ func (s *Service) Get(w http.ResponseWriter, r *http.Request) {
 		"versions": versions, "latest_content": latestContent, "bindings": bindings})
 }
 
+// Patch renames an asset (owner) and shares/unshares it into a workspace.
 func (s *Service) Patch(w http.ResponseWriter, r *http.Request) {
 	var q struct {
-		Name string `json:"name"`
+		Name        string `json:"name"`
+		WorkspaceID *string `json:"workspace_id"`
 	}
-	if httpx.Decode(r, &q) != nil || len(strings.TrimSpace(q.Name)) == 0 || len([]rune(q.Name)) > MaxAssetNameRunes {
-		httpx.Error(w, 400, "invalid_input", "检查名称")
+	if httpx.Decode(r, &q) != nil {
+		httpx.Error(w, 400, "invalid_json", "请求格式不正确")
 		return
 	}
-	result, e := s.DB.ExecContext(r.Context(), `UPDATE config_assets SET name=$1,updated_at=now() WHERE id=$2 AND user_id=$3`, strings.TrimSpace(q.Name), r.PathValue("id"), auth.Who(r).UserID)
-	if e != nil {
-		httpx.Error(w, 503, "unavailable", "更新失败")
-		return
+	if strings.TrimSpace(q.Name) != "" && len([]rune(q.Name)) <= MaxAssetNameRunes {
+		result, e := s.DB.ExecContext(r.Context(), `UPDATE config_assets SET name=$1,updated_at=now() WHERE id=$2 AND user_id=$3`, strings.TrimSpace(q.Name), r.PathValue("id"), auth.Who(r).UserID)
+		if e != nil {
+			httpx.Error(w, 503, "unavailable", "更新失败")
+			return
+		}
+		if n, _ := result.RowsAffected(); n == 0 {
+			httpx.Error(w, 404, "not_found", "配置不存在")
+			return
+		}
 	}
-	if n, _ := result.RowsAffected(); n == 0 {
-		httpx.Error(w, 404, "not_found", "配置不存在")
-		return
+	if q.WorkspaceID != nil {
+		if s.OnShare == nil {
+			httpx.Error(w, 503, "unavailable", "协作未启用")
+			return
+		}
+		if e := s.OnShare(r.Context(), auth.Who(r).UserID, r.PathValue("id"), strings.TrimSpace(*q.WorkspaceID)); e != nil {
+			if errors.Is(e, workspace.ErrNotMember) {
+				httpx.Error(w, 403, "not_authorized", "需要目标工作区的编辑者或所有者角色")
+				return
+			}
+			httpx.Error(w, 404, "not_found", "配置不存在")
+			return
+		}
 	}
 	httpx.WriteJSON(w, 200, map[string]bool{"ok": true})
 }

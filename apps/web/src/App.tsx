@@ -13,6 +13,8 @@ import Sync from "./pages/Sync";
 import Devices from "./pages/Devices";
 import Conversations from "./pages/Conversations";
 import ConfigAssets from "./pages/ConfigAssets";
+import Workspaces from "./pages/Workspaces";
+import Promotions from "./pages/Promotions";
 import Codex from "./pages/CodexOverview";
 import CodexConnections from "./pages/CodexConnections";
 import CursorConnections from "./pages/CursorConnections";
@@ -43,6 +45,8 @@ export default function App() {
           <Route path="/devices" element={<Devices />} />
           <Route path="/conversations" element={<Conversations />} />
           <Route path="/config" element={<ConfigAssets />} />
+          <Route path="/workspaces" element={<Workspaces />} />
+          <Route path="/promotions" element={<Promotions />} />
           <Route path="/admin" element={<Admin />} />
           <Route path="/choose" element={<ModeSelect />} />
         </Route>
@@ -150,6 +154,12 @@ function Shell() {
               </NavLink>
               <NavLink to="/config">
                 <span>⛭</span> 可移植配置
+              </NavLink>
+              <NavLink to="/workspaces">
+                <span>◈</span> 协作工作区
+              </NavLink>
+              <NavLink to="/promotions">
+                <span>％</span> 优惠情报
               </NavLink>
               {getSession()?.user.role === "admin" && <NavLink to="/admin"><span>⚙</span> 账户管理</NavLink>}
               <NavLink to="/login">

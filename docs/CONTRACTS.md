@@ -130,3 +130,21 @@ Secrets: values under key names matching token/secret/password/api_key/authoriza
 Reference transform v1: claude_desktop JSON → canonical → codex_cli TOML fragment. Secret refs render as ${NAME} placeholders with explicit loss entries; unknown fields are recorded, never silently dropped. Additional platforms and the reverse TOML parser are INH-473. Bindings are declarative targets only; file writes stay with the desktop bridge.
 
 Bridge config discovery scans only explicitly authorized absolute directories (scan_directories, ≤8 entries), whitelisted filenames, ≤3 depth, ≤500 files, ≤256KiB per file, and uploads metadata plus secret KEY NAMES only — file contents and values never leave the machine. Config import content is capped at 256KiB in-handler.
+
+## Workspace & collaboration v1 (M5, 2026-09-29)
+
+Workspaces scope shared canonical assets only (conversations, config assets). Provider accounts, quotas, notifications and sync notes stay strictly personal and never enter a workspace.
+
+Roles: owner (membership control, delete), editor (read + comment), viewer (read only). Enforcement: shared-resource reads resolve as `owner OR workspace-member`; only the resource owner mutates or unshares content; comments require editor+. Membership changes revoke access immediately (no grace window) and are audit-logged (`audit_events`: workspace_created/invited, member_added/removed, resource_shared, workspace_comment).
+
+Invites are by email of an existing account, role-bound, pending until accepted by the matching session; acceptance and revocation are explicit. Sharing is per-resource (`workspace_id` on the row); the ownership check for the membership table stays inside the workspace package via `workspace.ReadableScope`.
+
+Change hints v1 are Server-Sent Events (`GET /api/v1/change-hints`): per-user in-memory buffer (256 events), `Last-Event-ID` replay after reconnect, coarse pointers only in payloads (never resource contents). The WebSocket upgrade for INH-513 is a delivery swap with identical semantics, not a contract change.
+
+## Promotion intelligence v1 (M6, 2026-09-29)
+
+Campaign identity: `content_hash` = provider + normalized title + normalized URL (tracking params stripped, host lowercased, trailing slash removed) + discount shape. First sight creates; later sightings only append per-source observations. The feed never shows the same campaign twice, and notifications fire at most once per user per promotion (PK `promotion_notifications`).
+
+Time contract: `time_precision ∈ {exact, day, unknown}`; unknown means NO timestamps are stored or rendered — unknown end times are never fabricated into precise values. Precision `day` truncates to UTC midnight. Promotions already ended at submission are stored as expired; a ticker sweep archives rows whose `ends_at` passes after creation.
+
+Sources: whitelisted kinds (official_blog, pricing_page, announcement, rss, user_submit). Official kinds are trusted (confidence high) and admin-gated; user submissions are medium. RSS/Atom ingestion reuses the shared dedup path; feed dates are recorded as day precision. Confidence is provenance-derived and rendered alongside every entry.

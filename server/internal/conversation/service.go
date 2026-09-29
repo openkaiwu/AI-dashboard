@@ -18,11 +18,15 @@ import (
 	"aihub.dev/server/internal/db"
 	"aihub.dev/server/internal/httpx"
 	"aihub.dev/server/internal/jobs"
+	"aihub.dev/server/internal/workspace"
 )
 
 // Service owns the conversation portability HTTP surface and persistence.
 type Service struct {
 	DB *sql.DB
+	// OnShare binds/unbinds a conversation to a workspace (wired to the workspace
+	// service at composition; keeps this package free of collaboration imports).
+	OnShare func(ctx context.Context, userID, resourceID, workspaceID string) error
 }
 
 const importJobKind = "conversation_import"
@@ -223,7 +227,7 @@ func (s *Service) ListConversations(w http.ResponseWriter, r *http.Request) {
 	projectFilter := strings.TrimSpace(r.URL.Query().Get("project_id"))
 	query := `SELECT c.id,c.title,c.provider_slug,c.message_count,c.project_id,p.name,c.created_at,c.updated_at,
 		(SELECT count(*) FROM conversation_branches b WHERE b.conversation_id=c.id)
-		FROM conversations c LEFT JOIN projects p ON p.id=c.project_id WHERE c.user_id=$1`
+		FROM conversations c LEFT JOIN projects p ON p.id=c.project_id WHERE` + workspace.ReadableScope("c", 1)
 	args := []any{auth.Who(r).UserID}
 	if projectFilter != "" {
 		query += ` AND c.project_id=$2`
@@ -310,7 +314,8 @@ func (s *Service) loadConversation(ctx context.Context, userID, id string) (*con
 	var conv conversationView
 	var projectID, projectName sql.NullString
 	e := s.DB.QueryRowContext(ctx, `SELECT c.id,c.title,c.provider_slug,c.external_id,c.project_id,p.name,c.message_count,c.created_at,c.updated_at
-		FROM conversations c LEFT JOIN projects p ON p.id=c.project_id WHERE c.id=$1 AND c.user_id=$2`, id, userID).
+		FROM conversations c LEFT JOIN projects p ON p.id=c.project_id
+		WHERE c.id=$1 AND`+workspace.ReadableScope("c", 2), id, userID).
 		Scan(&conv.ID, &conv.Title, &conv.ProviderSlug, &conv.ExternalID, &projectID, &projectName, &conv.MessageCount, &conv.CreatedAt, &conv.UpdatedAt)
 	if e != nil {
 		return nil, e
@@ -391,23 +396,26 @@ func (s *Service) DeleteConversation(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, 200, map[string]bool{"ok": true})
 }
 
-// PatchConversation assigns a conversation to a project (or detaches with null).
+// PatchConversation assigns a conversation to a project (or detaches with null)
+// and shares/unshares it into a workspace (owner only, wired via OnShare).
 func (s *Service) PatchConversation(w http.ResponseWriter, r *http.Request) {
 	var q struct {
-		ProjectID *string `json:"project_id"`
-		Title     *string `json:"title"`
+		ProjectID   *string `json:"project_id"`
+		Title       *string `json:"title"`
+		WorkspaceID *string `json:"workspace_id"`
 	}
 	if httpx.Decode(r, &q) != nil {
 		httpx.Error(w, 400, "invalid_json", "请求格式不正确")
 		return
 	}
+	who := auth.Who(r)
 	if q.Title != nil {
 		title := strings.TrimSpace(*q.Title)
 		if title == "" || len([]rune(title)) > MaxTitleRunes {
 			httpx.Error(w, 400, "invalid_input", "检查标题")
 			return
 		}
-		if _, e := s.DB.ExecContext(r.Context(), `UPDATE conversations SET title=$1,updated_at=now() WHERE id=$2 AND user_id=$3`, title, r.PathValue("id"), auth.Who(r).UserID); e != nil {
+		if _, e := s.DB.ExecContext(r.Context(), `UPDATE conversations SET title=$1,updated_at=now() WHERE id=$2 AND user_id=$3`, title, r.PathValue("id"), who.UserID); e != nil {
 			httpx.Error(w, 503, "unavailable", "更新失败")
 			return
 		}
@@ -416,7 +424,7 @@ func (s *Service) PatchConversation(w http.ResponseWriter, r *http.Request) {
 		projectID := strings.TrimSpace(*q.ProjectID)
 		if projectID != "" {
 			var n int
-			if e := s.DB.QueryRowContext(r.Context(), `SELECT count(*) FROM projects WHERE id=$1 AND user_id=$2`, projectID, auth.Who(r).UserID).Scan(&n); e != nil || n == 0 {
+			if e := s.DB.QueryRowContext(r.Context(), `SELECT count(*) FROM projects WHERE id=$1 AND user_id=$2`, projectID, who.UserID).Scan(&n); e != nil || n == 0 {
 				httpx.Error(w, 400, "invalid_input", "项目不存在")
 				return
 			}
@@ -425,8 +433,22 @@ func (s *Service) PatchConversation(w http.ResponseWriter, r *http.Request) {
 		if projectID != "" {
 			target = projectID
 		}
-		if _, e := s.DB.ExecContext(r.Context(), `UPDATE conversations SET project_id=$1,updated_at=now() WHERE id=$2 AND user_id=$3`, target, r.PathValue("id"), auth.Who(r).UserID); e != nil {
+		if _, e := s.DB.ExecContext(r.Context(), `UPDATE conversations SET project_id=$1,updated_at=now() WHERE id=$2 AND user_id=$3`, target, r.PathValue("id"), who.UserID); e != nil {
 			httpx.Error(w, 503, "unavailable", "更新失败")
+			return
+		}
+	}
+	if q.WorkspaceID != nil {
+		if s.OnShare == nil {
+			httpx.Error(w, 503, "unavailable", "协作未启用")
+			return
+		}
+		if e := s.OnShare(r.Context(), who.UserID, r.PathValue("id"), strings.TrimSpace(*q.WorkspaceID)); e != nil {
+			if errors.Is(e, workspace.ErrNotMember) {
+				httpx.Error(w, 403, "not_authorized", "需要目标工作区的编辑者或所有者角色")
+				return
+			}
+			httpx.Error(w, 404, "not_found", "会话不存在")
 			return
 		}
 	}
