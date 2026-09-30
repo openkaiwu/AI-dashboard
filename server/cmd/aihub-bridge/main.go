@@ -28,6 +28,11 @@ type config struct {
 	CursorEnabled   *bool    `json:"cursor_enabled"`
 	IntervalSeconds int      `json:"interval_seconds"`
 	ScanDirectories []string `json:"scan_directories"`
+	OfficialAPI     *struct {
+		Endpoint     string `json:"endpoint"`
+		Token        string `json:"token"`
+		ProviderSlug string `json:"provider_slug"`
+	} `json:"official_api"`
 }
 
 func validServer(raw string) bool {
@@ -127,6 +132,9 @@ func run() error {
 		}
 		if len(cfg.ScanDirectories) > 0 && (*once || !time.Now().Before(next["config_scan"])) {
 			update("config_scan", uploadConfigScan(ctx, client, cfg, *once))
+		}
+		if cfg.OfficialAPI != nil && cfg.OfficialAPI.Endpoint != "" && (*once || !time.Now().Before(next[provider.SlugOfficial])) {
+			update(provider.SlugOfficial, uploadOfficial(ctx, client, cfg, *once))
 		}
 		if *once {
 			return nil

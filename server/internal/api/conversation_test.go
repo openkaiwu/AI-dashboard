@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
@@ -184,6 +185,37 @@ func TestConversationImportDedupBranchAndArchiveRoundTrip(t *testing.T) {
 	if done["status"] != "completed" || num(done["conversations_created"]) != 1 || num(done["messages_imported"]) != 2 {
 		t.Fatalf("codex import wrong: %v", done)
 	}
+	// Skipped lines are surfaced as warnings, never silently dropped (INH-446).
+	warnings := done["warnings"].([]any)
+	foundSkip := false
+	for _, w := range warnings {
+		if ws, ok := w.(string); ok && strings.Contains(ws, "第 3 行") {
+			foundSkip = true
+		}
+	}
+	if !foundSkip {
+		t.Fatalf("skipped line warning missing: %v", warnings)
+	}
+
+	// 8. Content search finds conversations by message text.
+	code, found := call(t, ts, "GET", "/api/v1/conversations?q="+encodeQuery("备选答"), at, nil)
+	if code != 200 || len(found["conversations"].([]any)) != 1 {
+		t.Fatalf("content search failed: %d %v", code, found)
+	}
+	code, none := call(t, ts, "GET", "/api/v1/conversations?q="+encodeQuery("绝无仅有的字符串"), at, nil)
+	if code != 200 || len(none["conversations"].([]any)) != 0 {
+		t.Fatalf("search should be empty: %d %v", code, none)
+	}
+
+	// 9. JSONL export: one canonical line, re-importable as archive content.
+	code, jsonl := rawCall(t, ts, "GET", "/api/v1/conversations/"+branchDemo+"/export?format=jsonl", at, nil)
+	if code != 200 || !bytes.Contains(jsonl, []byte(`"title":"Branch demo"`)) || bytes.Count(jsonl, []byte("\n")) != 1 {
+		t.Fatalf("jsonl export wrong: %d %s", code, jsonl)
+	}
+}
+
+func encodeQuery(s string) string {
+	return url.QueryEscape(s)
 }
 
 func TestConversationImportRejectsInvalidInput(t *testing.T) {

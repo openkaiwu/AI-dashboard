@@ -183,3 +183,61 @@ func TestConfigPortabilitySecretHygieneTransformAndRollback(t *testing.T) {
 	discBytes, _ := json.Marshal(disc)
 	leak("discoveries", discBytes)
 }
+
+func TestConfigReverseTransformAndSecondPlatform(t *testing.T) {
+	database := testdb.Open(t)
+	ts := server(t, database)
+	a := login(t, ts, true, "desktop")
+	at := a["token"].(string)
+
+	// 1. Import the Codex TOML fragment (reverse transformer, INH-473).
+	toml := "[mcp_servers.filesystem]\ncommand = \"npx\"\nargs = [\"-y\", \"@x\"]\n[mcp_servers.filesystem.env]\nAPI_TOKEN = \"${API_TOKEN}\"\nNODE_OPTIONS = \"--max-old-space-size=4096\"\n"
+	code, out := call(t, ts, "POST", "/api/v1/config-assets/import", at, map[string]string{"platform": "codex_cli", "name": "Codex 导入", "content": toml})
+	if code != 201 {
+		t.Fatalf("toml import %d: %v", code, out)
+	}
+	assetID := out["id"].(string)
+	code, detail := call(t, ts, "GET", "/api/v1/config-assets/"+assetID, at, nil)
+	if code != 200 {
+		t.Fatalf("get %d", code)
+	}
+	latest := detail["latest_content"].(map[string]any)
+	servers := latest["mcp_servers"].([]any)
+	fs := servers[0].(map[string]any)
+	if fs["command"] != "npx" {
+		t.Fatalf("toml command lost: %v", fs)
+	}
+	env := fs["env"].(map[string]any)
+	if ref, ok := env["API_TOKEN"].(map[string]any); !ok || ref["secret_ref"] != "env:API_TOKEN" {
+		t.Fatalf("placeholder not mapped to secret ref: %v", env)
+	}
+	if env["NODE_OPTIONS"] != "--max-old-space-size=4096" {
+		t.Fatalf("plain env lost: %v", env)
+	}
+
+	// 2. Transform the same canonical content to claude_desktop (second platform).
+	code, tr := call(t, ts, "POST", "/api/v1/config-assets/"+assetID+"/transform", at, map[string]string{"target_platform": "claude_desktop"})
+	if code != 200 {
+		t.Fatalf("claude transform %d: %v", code, tr)
+	}
+	rendered := tr["content"].(string)
+	for _, golden := range []string{"\"mcpServers\"", "\"filesystem\"", "\"command\": \"npx\"", "\"API_TOKEN\": \"${API_TOKEN}\""} {
+		if !strings.Contains(rendered, golden) {
+			t.Fatalf("claude output missing %q in:\n%s", golden, rendered)
+		}
+	}
+
+	// 3. Round-trip: the claude output re-imports into the same canonical shape.
+	code, out2 := call(t, ts, "POST", "/api/v1/config-assets/import", at, map[string]string{"platform": "claude_desktop", "name": "往返", "content": rendered})
+	if code != 201 {
+		t.Fatalf("claude reimport %d: %v", code, out2)
+	}
+	code, detail2 := call(t, ts, "GET", "/api/v1/config-assets/"+out2["id"].(string), at, nil)
+	if code != 200 {
+		t.Fatalf("get2 %d", code)
+	}
+	latest2 := detail2["latest_content"].(map[string]any)
+	if latest2["mcp_servers"].([]any)[0].(map[string]any)["command"] != "npx" {
+		t.Fatalf("round-trip lost command: %v", latest2)
+	}
+}

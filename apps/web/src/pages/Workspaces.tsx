@@ -34,6 +34,7 @@ export default function Workspaces(){
  return <section>
   <p className="eyebrow">WORKSPACE &amp; COLLABORATION</p><h1>协作工作区</h1>
   <p className="lead">工作区共享会话与配置资产，不共享任何第三方账号；成员移除后访问立即失效。</p>
+  <p className="muted">权限说明：所有者管理成员与邀请 · 编辑者可读可评论 · 查看者仅可读；共享资源的内容只有原始所有者能修改。</p>
   {error&&<p className="error">{error}</p>}{note&&<p className="muted">{note}</p>}
   {myInvites.length>0&&<div className="device-list">{myInvites.map(i=><article className="device-card" key={i.id}><div><h3>邀请：{i.workspace_name}（{i.role==="editor"?"编辑者":"查看者"}）</h3></div><div><button onClick={()=>void accept(i.id)}>接受</button></div></article>)}</div>}
   <div className="sync-banner"><strong>新建工作区</strong><input value={name} onChange={e=>setName(e.target.value)} placeholder="工作区名称"/><button onClick={()=>void create()}>创建</button></div>

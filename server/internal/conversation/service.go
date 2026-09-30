@@ -111,15 +111,17 @@ func (s *Service) Import(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, 400, "import_too_large", "导入文件超过 900KiB 的 v1 上限")
 		return
 	}
-	if _, e = ParseImport(source, raw); e != nil {
+	parsed, pe := ParseImport(source, raw)
+	if pe != nil {
 		// Fail fast on structurally invalid input; the async pass re-parses the retained snapshot.
-		if errors.Is(e, ErrFormat) || errors.Is(e, ErrTooLarge) || errors.Is(e, ErrTooMany) {
-			httpx.Error(w, 400, "invalid_import", "导入格式无效: "+e.Error())
+		if errors.Is(pe, ErrFormat) || errors.Is(pe, ErrTooLarge) || errors.Is(pe, ErrTooMany) {
+			httpx.Error(w, 400, "invalid_import", "导入格式无效: "+pe.Error())
 			return
 		}
 		httpx.Error(w, 503, "unavailable", "导入解析失败")
 		return
 	}
+	warningsJSON, _ := json.Marshal(parsed.Warnings)
 	fileName := strings.TrimSpace(r.Header.Get("X-File-Name"))
 	if len(fileName) > 300 {
 		fileName = ""
@@ -132,8 +134,8 @@ func (s *Service) Import(w http.ResponseWriter, r *http.Request) {
 			importID, who.UserID, source, fileName, len(raw)); e != nil {
 			return e
 		}
-		if _, e := tx.ExecContext(r.Context(), `INSERT INTO conversation_raw_snapshots(id,import_id,user_id,source_type,content,content_hash) VALUES($1,$2,$3,$4,$5,$6)`,
-			httpx.NewID("rsnap"), importID, who.UserID, source, string(raw), hex.EncodeToString(hash[:])); e != nil {
+		if _, e := tx.ExecContext(r.Context(), `INSERT INTO conversation_raw_snapshots(id,import_id,user_id,source_type,content,content_hash,warnings) VALUES($1,$2,$3,$4,$5,$6,$7)`,
+			httpx.NewID("rsnap"), importID, who.UserID, source, string(raw), hex.EncodeToString(hash[:]), string(warningsJSON)); e != nil {
 			return e
 		}
 		payload, _ := json.Marshal(map[string]string{"import_id": importID})
@@ -147,7 +149,7 @@ func (s *Service) Import(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Service) ListImports(w http.ResponseWriter, r *http.Request) {
-	rows, e := s.DB.QueryContext(r.Context(), `SELECT id,source_type,file_name,size_bytes,status,conversations_created,conversations_deduplicated,messages_imported,branches_created,error,created_at,completed_at
+	rows, e := s.DB.QueryContext(r.Context(), `SELECT id,source_type,file_name,size_bytes,status,conversations_created,conversations_deduplicated,messages_imported,branches_created,error,warnings,created_at,completed_at
 		FROM conversation_imports WHERE user_id=$1 ORDER BY created_at DESC LIMIT 100`, auth.Who(r).UserID)
 	if e != nil {
 		httpx.Error(w, 503, "unavailable", "读取失败")
@@ -170,7 +172,7 @@ func (s *Service) ListImports(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Service) ImportStatus(w http.ResponseWriter, r *http.Request) {
-	row := s.DB.QueryRowContext(r.Context(), `SELECT id,source_type,file_name,size_bytes,status,conversations_created,conversations_deduplicated,messages_imported,branches_created,error,created_at,completed_at
+	row := s.DB.QueryRowContext(r.Context(), `SELECT id,source_type,file_name,size_bytes,status,conversations_created,conversations_deduplicated,messages_imported,branches_created,error,warnings,created_at,completed_at
 		FROM conversation_imports WHERE id=$1 AND user_id=$2`, r.PathValue("id"), auth.Who(r).UserID)
 	m, e := scanImportRow(row)
 	if errors.Is(e, sql.ErrNoRows) {
@@ -187,20 +189,24 @@ func (s *Service) ImportStatus(w http.ResponseWriter, r *http.Request) {
 type rowScanner interface{ Scan(dest ...any) error }
 
 func scanImportRow(row rowScanner) (map[string]any, error) {
-	var id, source, status, errText, fileName string
+	var id, source, status, errText, fileName, warnings string
 	var size, created, deduped, messages, branches int64
 	var createdAt time.Time
 	var completed sql.NullTime
-	if e := row.Scan(&id, &source, &fileName, &size, &status, &created, &deduped, &messages, &branches, &errText, &createdAt, &completed); e != nil {
+	if e := row.Scan(&id, &source, &fileName, &size, &status, &created, &deduped, &messages, &branches, &errText, &warnings, &createdAt, &completed); e != nil {
 		return nil, e
 	}
 	var completedAt any
 	if completed.Valid {
 		completedAt = completed.Time
 	}
+	warningList := []string{}
+	if warnings != "" {
+		_ = json.Unmarshal([]byte(warnings), &warningList)
+	}
 	return map[string]any{"id": id, "source_type": source, "file_name": fileName, "size_bytes": size, "status": status,
 		"conversations_created": created, "conversations_deduplicated": deduped, "messages_imported": messages,
-		"branches_created": branches, "error": errText, "created_at": createdAt, "completed_at": completedAt}, nil
+		"branches_created": branches, "error": errText, "warnings": warningList, "created_at": createdAt, "completed_at": completedAt}, nil
 }
 
 // ImportRaw returns the retained raw snapshot to its owner (provenance/re-import).
@@ -232,6 +238,10 @@ func (s *Service) ListConversations(w http.ResponseWriter, r *http.Request) {
 	if projectFilter != "" {
 		query += ` AND c.project_id=$2`
 		args = append(args, projectFilter)
+	}
+	if q := strings.TrimSpace(r.URL.Query().Get("q")); q != "" {
+		args = append(args, "%"+q+"%")
+		query += fmt.Sprintf(` AND (c.title ILIKE $%d OR EXISTS (SELECT 1 FROM conversation_messages msg WHERE msg.conversation_id=c.id AND msg.content ILIKE $%d))`, len(args), len(args))
 	}
 	query += ` ORDER BY c.updated_at DESC LIMIT 200`
 	rows, e := s.DB.QueryContext(r.Context(), query, args...)
@@ -476,6 +486,15 @@ func (s *Service) ExportConversation(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
 		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", conv.ID+".md"))
 		_, _ = w.Write([]byte(BuildMarkdown(&canonical)))
+	case "jsonl":
+		out, e := BuildJSONL([]Conversation{canonical})
+		if e != nil {
+			httpx.Error(w, 503, "unavailable", "导出失败")
+			return
+		}
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", conv.ID+".jsonl"))
+		_, _ = w.Write(out)
 	case "archive":
 		out, e := BuildArchive([]Conversation{canonical}, nil)
 		if e != nil {
@@ -486,7 +505,7 @@ func (s *Service) ExportConversation(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", conv.ID+".archive.json"))
 		_, _ = w.Write(out)
 	default:
-		httpx.Error(w, 400, "invalid_input", "format 只支持 archive 或 markdown")
+		httpx.Error(w, 400, "invalid_input", "format 只支持 archive、markdown 或 jsonl")
 	}
 }
 
@@ -580,8 +599,9 @@ func runImport(ctx context.Context, database *sql.DB, importID string, attempts 
 		}
 		return "persist failed"
 	}
-	_, pe = database.ExecContext(ctx, `UPDATE conversation_imports SET status='completed',conversations_created=$1,conversations_deduplicated=$2,messages_imported=$3,branches_created=$4,completed_at=now() WHERE id=$5`,
-		created, deduped, messages, branches, importID)
+	warningsJSON, _ := json.Marshal(im.Warnings)
+	_, pe = database.ExecContext(ctx, `UPDATE conversation_imports SET status='completed',conversations_created=$1,conversations_deduplicated=$2,messages_imported=$3,branches_created=$4,warnings=$5,completed_at=now() WHERE id=$6`,
+		created, deduped, messages, branches, string(warningsJSON), importID)
 	if pe != nil {
 		return "finalize failed"
 	}
@@ -646,6 +666,12 @@ func persistImport(ctx context.Context, database *sql.DB, userID string, im *Imp
 				if _, e := tx.ExecContext(ctx, `UPDATE conversations SET content_hash=$1,message_count=message_count+$2,updated_at=now() WHERE id=$3`,
 					hex.EncodeToString(combined[:]), addedMessages, existingID); e != nil {
 					return e
+				}
+				// Branch events feed workspace members when the conversation is shared (INH-509).
+				if sharedWS, wErr := workspace.ResourceWorkspaceID(ctx, tx, "conversations", existingID); wErr == nil && sharedWS != "" {
+					if e := workspace.RecordEvent(ctx, tx, sharedWS, userID, "branch_added", "conversation", existingID, fmt.Sprintf("%s: +%d 分支 / %d 消息", c.Title, addedBranches, addedMessages)); e != nil {
+						return e
+					}
 				}
 				continue
 			}

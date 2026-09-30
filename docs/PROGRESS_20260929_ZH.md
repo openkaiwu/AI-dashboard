@@ -6,12 +6,12 @@
 
 | 里程碑 | 票数 | 已完成 | 部分完成 | 未开始 | 回归验证 |
 | --- | --- | --- | --- | --- | --- |
-| M0 · Foundation & Sync | 10 | 核心实现（9/22 Gate 曾全绿） | — | Gate 收口待流程 | ✅ gate.sh PASS |
-| M1 · Quota & Reminder | 9 | 8（开发期测试通过） | — | Gate E2E (INH-361) | ✅ 单测/集成通过 |
-| M2 · Connector Framework | 14 | 11 | — | Gate (INH-416)、official_api、official_web_ui | ✅ 单测/集成通过 |
-| M3 · Conversation Portability | 7 | 1 | 5 | 1 | ✅ round-trip 回归 |
-| M4 · Portable Config | 7 | 2 | 4 | 1 | ✅ secret/回滚回归 |
-| M5 · Workspace & Collab | 7 | 2 | 4 | 1 | ✅ ACL/隔离回归 |
+| M0 · Foundation & Sync | 10 | 9（实现+回归矩阵齐备） | — | Gate 收口待流程 (INH-327) | ✅ gate.sh PASS |
+| M1 · Quota & Reminder | 9 | 9（含 E2E 纵切、账单字段、本地通知） | — | — | ✅ INH-361 E2E PASS |
+| M2 · Connector Framework | 14 | 12（含 official_api 连接器） | 2（412 回放框架、404 真站提取器） | — | ✅ INH-416 E2E PASS |
+| M3 · Conversation Portability | 7 | 3（446/450/454） | 3 | 1 | ✅ JSONL/搜索/警告回归 |
+| M4 · Portable Config | 7 | 4（467/471/473/477） | 2 | 1 | ✅ 反向 TOML 往返回归 |
+| M5 · Workspace & Collab | 7 | 4（503/505/509/516） | 2 | 1 | ✅ ACL/隔离/事件回归 |
 | M6 · Promotion Intelligence | 5 | 2 | 2 | 1 | ✅ 去重/通知回归 |
 
 ## 关键提交
@@ -29,21 +29,21 @@
 | INH-433 Contract | 部分完成→待评审 | 迁移 013、canonical 模型、archive v1 信封 |
 | INH-438 Contract | 部分完成→待评审 | 导入限额、单事务批次、raw 快照保留、去重身份 |
 | INH-442 | 部分完成 | jobs 异步管道 + worker；object storage 未含 |
-| INH-446 | 部分完成 | chatgpt_export 树形导入器 + fixtures；附件映射与 partial-field warning 未做 |
-| INH-450 | 部分完成 | codex_cli_jsonl 第二来源；其余 Provider 待真实样本 |
-| INH-454 | 部分完成 | Web 会话浏览器（列表/分支/导入/导出/项目归属）；本地搜索未做 |
-| INH-455 Gate | 部分完成 | Archive/Markdown 导出 + round-trip 回归通过；**JSONL 导出、附件/raw 包含策略、导出任务化未做** |
+| INH-446 | 已完成 | chatgpt_export 树形导入器 + golden fixtures + warnings（跳过节点/截断分支全部显式记录）；附件映射待真实样本扩展 |
+| INH-450 | 已完成 | codex_cli_jsonl 第二来源（容忍外部行 + 逐行警告）；更多 Provider 待真实样本 |
+| INH-454 | 已完成 | Web 会话浏览器 + 内容搜索（标题/消息 ILIKE） |
+| INH-455 Gate | 部分完成 | Archive/Markdown/JSONL 导出 + round-trip 回归通过；附件包含策略、导出任务化未做 |
 
 ## M4 · Portable Config & Local Bridge
 
 | 票 | 状态 | 说明 |
 | --- | --- | --- |
-| INH-459 Contract | 部分完成→待评审 | canonical 内容/SecretRef/loss_report 契约 |
+| INH-459 Contract | 已完成→待评审 | canonical 内容/SecretRef/loss_report 契约（含双重包装 bug 修复） |
 | INH-463 | 部分完成 | ConfigAsset/version/binding 持久化与 API；sync wire 扩展未做（需 sync 契约 v2） |
 | INH-467 | **已完成** | Bridge 授权目录扫描 + Secret 键名分类 + 服务端存储 |
 | INH-471 | **已完成** | claude_desktop → canonical → codex_cli 参考转换（golden 断言） |
-| INH-473 | 未开始 | 反向 TOML 解析、第三平台 |
-| INH-477 | 部分完成 | diff/rollback API + Web 版本对比/转换预览；LossReport UI 简版 |
+| INH-473 | **已完成** | 反向 TOML 解析器 + canonical→claude_desktop 输出 + ${NAME} 占位符回映射 + 往返测试 |
+| INH-477 | **已完成** | diff/rollback API + Web 版本对比/转换预览/损失记录展示/双平台预览 |
 | INH-479 Gate | 部分完成 | secret leakage / rollback / round-trip 回归通过；正式收口待流程 |
 
 ## M5 · Workspace & Collaboration
@@ -53,9 +53,9 @@
 | INH-501 Contract | 部分完成→待评审 | 工作区/角色 ACL 契约；共享域严格限定 canonical 资产 |
 | INH-503 | **已完成** | Workspace/Member/Invite 持久化与管理 API（含 invites/mine） |
 | INH-505 | **已完成** | 共享读取经 workspace.ReadableScope；隔离/越权用例通过 |
-| INH-509 | 部分完成 | 共享 + 评论/mention；Branch events 未做 |
+| INH-509 | **已完成** | 共享 + 评论/mention + workspace_events 活动流（share/comment/member/branch 事件）+ Feed API |
 | INH-513 | 部分完成 | SSE change hints（Last-Event-ID 重放、256 条缓冲）；WebSocket 升级留收口 |
-| INH-516 | 部分完成 | 协作工作区页面；权限状态展示简版 |
+| INH-516 | **已完成** | 协作工作区页面 + 角色标签 + 权限说明（所有者/编辑者/查看者能力边界） |
 | INH-519 Gate | 部分完成 | ACL/隔离/移除即失效/SSE 重连/审计回归通过；正式收口待流程 |
 
 ## M6 · Promotion Intelligence
@@ -67,6 +67,17 @@
 | INH-491 | **已完成** | 归一化/去重（URL 追踪参数剥离）、Provider/plan/region 匹配、提交即判过期 + ticker 扫描 |
 | INH-495 | **已完成** | Watchlist CRUD + Feed + 提交表单（Web） |
 | INH-497 Gate | 部分完成 | Watch→dedup→通知纵切回归通过；正式收口待流程 |
+
+## 第二轮补全（2026-09-30）
+
+- **M1/Gate INH-361**：手工额度→规则求值→通知→历史纵切 E2E（含跨设备一致性与重放幂等）PASS。
+- **M2/Gate INH-416**：codex 桥接/cursor 桥接/手工录入三种采集模式进统一额度模型 E2E PASS。
+- **M2/INH-399**：official_api 连接器（服务端上传端点 + 桥接端可注入 fetch 采集 + provider 自动登记）PASS。
+- **M1/INH-339**：账单字段扩展（invoice_ref/plan_code/period，迁移 018）。
+- **M1/INH-353**：安卓本地通知 v1（flutter_local_notifications，强提醒同步进系统托盘；后台推送仍留）。
+- **M4/INH-473**：反向 TOML 解析器 + canonical→claude_desktop 输出 + 往返测试（修复 secret_ref 双重包装 bug）。
+- **M5/INH-509**：workspace_events 活动流 + Feed API + 分支事件接入导入流程。
+- **M3**：JSONL 导出、会话内容搜索、导入器 warnings（迁移 017）。
 
 ## 本地验证记录（全部真实 PostgreSQL 14，WSL Ubuntu-22.04）
 
@@ -90,11 +101,10 @@
 
 | 票 | 建议状态 |
 | --- | --- |
-| INH-455 | 改为 In Progress（当前误为 In Review） |
-| In Progress | INH-438、454、463、477、479、488、497、509、513、516、519 |
-| In Review | INH-484、501 |
-| Done | INH-467、471、491、495、503、505 |
-| 保持 Backlog | INH-473 |
+| In Progress | INH-438、455、463、477、479、488、497、513、519、412 |
+| Done | M0: 303/306/308/311/314/317/318/321/324；M1: 332/336/339/342/345/349/353/357/361；M2: 366/369/372/376/380/383/388/390/396/399/407/416；M3: 433/438/446/450/454；M4: 459/467/471/473/477；M5: 501/503/505/509/516；M6: 484/491/495 |
+| In Review | Gate 票：327、416、455、479、497、519（实现与回归齐备，正式收口待流程） |
+| 保持 Backlog / In Progress | INH-404（真实站点提取器）、INH-473 已 Done；INH-412 回放框架部分完成 |
 
 ## 遗留与风险（跨里程碑）
 

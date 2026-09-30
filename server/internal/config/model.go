@@ -44,6 +44,12 @@ func ClassifySecrets(node any, path string, loss *[]LossEntry) any {
 	case map[string]any:
 		for key, value := range tv {
 			childPath := path + "." + key
+			if m, isMap := value.(map[string]any); isMap {
+				if _, alreadyRef := m["secret_ref"]; alreadyRef {
+					tv[key] = value // an existing secret ref is never re-wrapped
+					continue
+				}
+			}
 			if secretKeyPattern.MatchString(key) {
 				if _, isRef := value.(map[string]any); !isRef {
 					name := strings.ToUpper(regexp.MustCompile(`[^A-Za-z0-9_]`).ReplaceAllString(key, "_"))

@@ -7,7 +7,7 @@ allowed = {
  'jobs': {'httpx'},
  'audit': set(), 'db': set(), 'httpx': set(),
  'quota': set(), 'notification': {'quota'}, 'provider': set(),
- 'connector': {'auth','codex','cursor','httpx','quota','config'},
+ 'connector': {'auth','codex','cursor','official','httpx','quota','config'},
  'codex': set(), 'cursor': set(),
  'conversation': {'auth','db','httpx','jobs','workspace'},
  'config': {'auth','db','httpx','workspace'},

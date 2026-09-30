@@ -41,6 +41,20 @@ func BuildArchive(conversations []Conversation, projects []ArchiveProject) ([]by
 	return append(out, '\n'), nil
 }
 
+// BuildJSONL renders one canonical conversation per line (machine-readable export).
+func BuildJSONL(conversations []Conversation) ([]byte, error) {
+	var b strings.Builder
+	for _, c := range conversations {
+		line, e := json.Marshal(c)
+		if e != nil {
+			return nil, e
+		}
+		b.Write(line)
+		b.WriteByte('\n')
+	}
+	return []byte(b.String()), nil
+}
+
 // BuildMarkdown renders a human-readable transcript for one conversation.
 func BuildMarkdown(c *Conversation) string {
 	var b strings.Builder

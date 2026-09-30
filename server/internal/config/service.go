@@ -481,8 +481,8 @@ func (s *Service) TransformPreview(w http.ResponseWriter, r *http.Request) {
 		TargetPlatform string `json:"target_platform"`
 	}
 	assetID, userID := r.PathValue("id"), auth.Who(r).UserID
-	if httpx.Decode(r, &q) != nil || q.TargetPlatform != "codex_cli" {
-		httpx.Error(w, 400, "invalid_input", "v1 只支持 target_platform=codex_cli")
+	if httpx.Decode(r, &q) != nil || (q.TargetPlatform != "codex_cli" && q.TargetPlatform != "claude_desktop") {
+		httpx.Error(w, 400, "invalid_input", "v1 只支持 target_platform=codex_cli 或 claude_desktop")
 		return
 	}
 	var kind string
@@ -505,7 +505,13 @@ func (s *Service) TransformPreview(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, 400, "invalid_input", "v1 transform 只支持 mcp_server")
 		return
 	}
-	out, loss, e := TransformToCodex(content)
+	var out string
+	var loss []LossEntry
+	if q.TargetPlatform == "codex_cli" {
+		out, loss, e = TransformToCodex(content)
+	} else {
+		out, loss, e = TransformToClaude(content)
+	}
 	if e != nil {
 		httpx.Error(w, 400, "invalid_input", "转换失败: "+e.Error())
 		return
@@ -548,8 +554,8 @@ func (s *Service) ImportFromPlatform(w http.ResponseWriter, r *http.Request) {
 		Name     string `json:"name"`
 		Content  string `json:"content"`
 	}
-	if httpx.Decode(r, &q) != nil || q.Platform != "claude_desktop" {
-		httpx.Error(w, 400, "invalid_input", "v1 只支持 platform=claude_desktop")
+	if httpx.Decode(r, &q) != nil || (q.Platform != "claude_desktop" && q.Platform != "codex_cli") {
+		httpx.Error(w, 400, "invalid_input", "v1 只支持 platform=claude_desktop 或 codex_cli")
 		return
 	}
 	if q.Content == "" || len(q.Content) > MaxContentBytes {
@@ -564,15 +570,22 @@ func (s *Service) ImportFromPlatform(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, 400, "invalid_input", "名称过长")
 		return
 	}
-	content, loss, e := ParseClaudeDesktop(name, []byte(q.Content))
+	var content map[string]any
+	var loss []LossEntry
+	var e error
+	if q.Platform == "claude_desktop" {
+		content, loss, e = ParseClaudeDesktop(name, []byte(q.Content))
+	} else {
+		content, loss, e = ParseCodexTOML([]byte(q.Content))
+	}
 	if e != nil {
 		httpx.Error(w, 400, "invalid_import", "解析失败: "+e.Error())
 		return
 	}
 	id := httpx.NewID("cfg")
 	e = db.Tx(r.Context(), s.DB, func(tx *sql.Tx) error {
-		if _, e := tx.ExecContext(r.Context(), `INSERT INTO config_assets(id,user_id,name,kind,source_platform,latest_version) VALUES($1,$2,$3,'mcp_server','claude_desktop',1)`,
-			id, auth.Who(r).UserID, name); e != nil {
+		if _, e := tx.ExecContext(r.Context(), `INSERT INTO config_assets(id,user_id,name,kind,source_platform,latest_version) VALUES($1,$2,$3,'mcp_server',$4,1)`,
+			id, auth.Who(r).UserID, name, q.Platform); e != nil {
 			return e
 		}
 		return insertVersion(r.Context(), tx, id, auth.Who(r).UserID, 1, content, loss, "import")

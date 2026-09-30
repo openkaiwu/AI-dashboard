@@ -18,6 +18,7 @@ func ParseImport(sourceType string, raw []byte) (*Import, error) {
 		return nil, ErrTooLarge
 	}
 	var im Import
+	var warnings []string
 	switch sourceType {
 	case "archive":
 		var env archiveEnvelope
@@ -30,12 +31,13 @@ func ParseImport(sourceType string, raw []byte) (*Import, error) {
 		im.Conversations = env.Conversations
 		im.Projects = env.Projects
 	case "chatgpt_export":
-		im.Conversations = parseChatGPTExport(raw)
+		im.Conversations, warnings = parseChatGPTExport(raw)
 	case "codex_cli_jsonl":
-		im.Conversations = parseCodexJSONL(raw)
+		im.Conversations, warnings = parseCodexJSONL(raw)
 	default:
 		return nil, fmt.Errorf("%w: unknown source %q", ErrFormat, sourceType)
 	}
+	im.Warnings = warnings
 	im.SourceType = sourceType
 	if e := im.Validate(); e != nil {
 		return nil, e
@@ -48,8 +50,14 @@ func ParseImport(sourceType string, raw []byte) (*Import, error) {
 			c.ExternalID = c.ContentHash[:24]
 		}
 		c.DedupKey = c.ExternalID
+		im.Warnings = append(im.Warnings, c.warnings...)
 	}
 	return &im, nil
+}
+
+// appendWarning threads importer warnings through the conversation being built.
+func (c *Conversation) appendWarning(format string, args ...any) {
+	c.warnings = append(c.warnings, fmt.Sprintf(format, args...))
 }
 
 // ContentHash is the dedup fingerprint: ordered (branch, role, content) triples.
@@ -141,10 +149,12 @@ func appendGptBranch(conv *Conversation, mapping map[string]gptNode, path []stri
 	for _, id := range path {
 		n := mapping[id]
 		if n.Message == nil {
-			continue // wrapper/meta nodes carry no content
+			conv.appendWarning("chatgpt: 节点 %s 为元数据节点，无消息内容", id)
+			continue
 		}
 		content := gptParts(&n)
 		if strings.TrimSpace(content) == "" {
+			conv.appendWarning("chatgpt: 节点 %s 内容为空，已跳过", id)
 			continue
 		}
 		m := Message{Role: n.Message.Author.Role, Content: content, SentAt: gptTime(n.Message.CreateTime), ExternalRef: id}
@@ -168,19 +178,24 @@ func appendGptBranch(conv *Conversation, mapping map[string]gptNode, path []stri
 
 // parseChatGPTExport walks the current path as "main" and turns every divergent
 // subtree into a named branch, preserving in-branch parent chains.
-func parseChatGPTExport(raw []byte) []Conversation {
+func parseChatGPTExport(raw []byte) ([]Conversation, []string) {
+	var warnings []string
+	note := func(format string, args ...any) { warnings = append(warnings, fmt.Sprintf(format, args...)) }
 	var src []gptConversation
 	if e := json.Unmarshal(raw, &src); e != nil {
-		return nil
+		note("chatgpt: 顶层 JSON 解析失败，按空批次处理")
+		return nil, warnings
 	}
 	out := make([]Conversation, 0, len(src))
-	for _, g := range src {
+	for gi, g := range src {
 		if len(g.Mapping) == 0 {
+			note("chatgpt: 会话 %d 无 mapping，已跳过", gi+1)
 			continue
 		}
 		conv := Conversation{Title: g.Title, ProviderSlug: "chatgpt", CreatedAt: gptTime(g.CreateTime)}
 		main := gptLineage(g.Mapping, g.CurrentNode, "")
 		if !appendGptBranch(&conv, g.Mapping, main, "main") {
+			note("chatgpt: 会话 %q 无可导入消息，已跳过", g.Title)
 			continue
 		}
 		onMain := map[string]bool{}
@@ -199,6 +214,9 @@ func parseChatGPTExport(raw []byte) []Conversation {
 			roots = append(roots, id)
 		}
 		sort.Strings(roots)
+		if skipped := len(roots) - (MaxBranchesPerConv - 1); skipped > 0 {
+			note("chatgpt: 会话 %q 超出 %d 分支上限，%d 个分支被截断", g.Title, MaxBranchesPerConv, skipped)
+		}
 		for i, root := range roots {
 			if len(conv.Branches) >= MaxBranchesPerConv {
 				break
@@ -218,15 +236,16 @@ func parseChatGPTExport(raw []byte) []Conversation {
 		}
 		out = append(out, conv)
 	}
-	return out
+	return out, warnings
 }
 
 // --- codex_cli_jsonl: tolerant line-delimited session export ---
 
-func parseCodexJSONL(raw []byte) []Conversation {
+func parseCodexJSONL(raw []byte) ([]Conversation, []string) {
+	var warnings []string
 	conv := Conversation{Title: "Codex 会话", ProviderSlug: "codex_cli"}
 	branch := Branch{Name: "main"}
-	for _, line := range strings.Split(string(raw), "\n") {
+	for lineNo, line := range strings.Split(string(raw), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
@@ -242,7 +261,8 @@ func parseCodexJSONL(raw []byte) []Conversation {
 			Content any    `json:"content"`
 		}
 		if e := json.Unmarshal([]byte(line), &item); e != nil {
-			continue // tolerate foreign lines; the format is append-only per line
+			warnings = append(warnings, fmt.Sprintf("codex: 第 %d 行不是有效 JSON，已跳过", lineNo+1))
+			continue
 		}
 		role := item.Payload.Role
 		if role == "" {
@@ -256,6 +276,7 @@ func parseCodexJSONL(raw []byte) []Conversation {
 			content = flattenContent(item.Content)
 		}
 		if role == "" || strings.TrimSpace(content) == "" {
+			warnings = append(warnings, fmt.Sprintf("codex: 第 %d 行缺少角色或内容，已跳过", lineNo+1))
 			continue
 		}
 		m := Message{Role: role, Content: content}
@@ -268,10 +289,11 @@ func parseCodexJSONL(raw []byte) []Conversation {
 		}
 	}
 	if len(branch.Messages) == 0 {
-		return nil
+		warnings = append(warnings, "codex: 未发现可导入消息")
+		return nil, warnings
 	}
 	conv.Branches = []Branch{branch}
-	return []Conversation{conv}
+	return []Conversation{conv}, warnings
 }
 
 // flattenContent renders Codex-style content blocks [{type:text|input_text|output_text,...}].

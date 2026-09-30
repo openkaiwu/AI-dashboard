@@ -54,6 +54,8 @@ type Conversation struct {
 	ProjectName  string    `json:"project_name,omitempty"`
 	Branches     []Branch  `json:"branches"`
 	CreatedAt    *time.Time `json:"created_at,omitempty"`
+
+	warnings []string // importer loss/warning notes, merged into Import.Warnings
 }
 
 // totalMessages counts every message across branches.
@@ -65,11 +67,13 @@ func (c *Conversation) totalMessages() int {
 	return n
 }
 
-// Import is a parsed batch ready for persistence.
+// Import is a parsed batch ready for persistence; Warnings record every
+// skipped node/line so nothing is lost silently (INH-446 acceptance).
 type Import struct {
-	SourceType   string
+	SourceType    string
 	Conversations []Conversation
-	Projects     []ArchiveProject
+	Projects      []ArchiveProject
+	Warnings      []string
 }
 
 func validRole(role string) bool {

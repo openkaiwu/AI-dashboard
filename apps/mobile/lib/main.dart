@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:drift/native.dart';
+import 'local_notifications.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:path/path.dart' as p;
@@ -18,6 +19,7 @@ import 'theme.dart';
 import 'manual_account.dart';
 
 void main() {
+  unawaited(LocalNotifications.init());
   WidgetsFlutterBinding.ensureInitialized();
   runApp(const HubApp());
 }
@@ -234,6 +236,11 @@ class _HubHomeState extends State<HubHome> with WidgetsBindingObserver {
           '${selected!['url']}|${api!.session!['user']['id']}|${api!.session!['device_id']}';
       final seenKey = 'strong-seen:$scope:$id';
       if (await vault.read(key: seenKey) != null) return;
+      await LocalNotifications.showReminder(
+        id: '$scope:$id',
+        title: next['title'] as String? ?? 'AI Hub 提醒',
+        body: next['body'] as String? ?? '',
+      );
       final slug = next['provider_slug'] as String?;
       if (slug == 'cursor' || slug == 'codex') await switchUiMode(slug!);
       if (!mounted) return;

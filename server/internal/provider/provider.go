@@ -2,8 +2,9 @@
 package provider
 
 const (
-	SlugCodex  = "codex"
-	SlugCursor = "cursor"
+	SlugCodex    = "codex"
+	SlugCursor   = "cursor"
+	SlugOfficial = "official"
 )
 
 // Connector describes a local bridge upload target.
@@ -37,7 +38,15 @@ func (cursorConnector) Manifest() Manifest {
 	return Manifest{Slug: SlugCursor, Version: "m2-1", Capabilities: []string{"quota.snapshot", "quota.history"}, Acquisition: "desktop_bridge", Status: "partial"}
 }
 
-// LocalConnectors returns the M0 dual-target bridge connectors.
+type officialConnector struct{}
+
+func (officialConnector) Slug() string       { return SlugOfficial }
+func (officialConnector) UploadPath() string { return "/api/v1/official/snapshot" }
+func (officialConnector) Manifest() Manifest {
+	return Manifest{Slug: SlugOfficial, Version: "m2-2", Capabilities: []string{"quota.snapshot"}, Acquisition: "official_api", Status: "partial"}
+}
+
+// LocalConnectors returns the bridge connectors (M0 dual-target + M2 official_api).
 func LocalConnectors() []Connector {
-	return []Connector{codexConnector{}, cursorConnector{}}
+	return []Connector{codexConnector{}, cursorConnector{}, officialConnector{}}
 }

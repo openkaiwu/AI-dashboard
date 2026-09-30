@@ -137,6 +137,9 @@ func (s *Service) SetResourceWorkspace(ctx context.Context, userID, resourceOwne
 		if _, e := tx.ExecContext(ctx, fmt.Sprintf(`UPDATE %s SET workspace_id=$1 WHERE id=$2 AND user_id=$3`, table), target, resourceID, resourceOwner); e != nil {
 			return e
 		}
+		if e := RecordEvent(ctx, tx, workspaceID, userID, "resource_shared", resourceType, resourceID, ""); e != nil {
+			return e
+		}
 		return audit.Record(ctx, tx, userID, "", "resource_shared")
 	})
 }
@@ -249,6 +252,9 @@ func (s *Service) AcceptInvite(w http.ResponseWriter, r *http.Request) {
 			return e
 		}
 		if _, e := tx.ExecContext(r.Context(), `UPDATE workspace_invites SET status='accepted',accepted_at=now() WHERE id=$1`, r.PathValue("id")); e != nil {
+			return e
+		}
+		if e := RecordEvent(r.Context(), tx, workspaceID, who.UserID, "member_added", "", "", ""); e != nil {
 			return e
 		}
 		return audit.Record(r.Context(), tx, who.UserID, who.DeviceID, "workspace_member_added")
@@ -381,6 +387,9 @@ func (s *Service) CreateComment(w http.ResponseWriter, r *http.Request) {
 			id, workspaceID, who.UserID, q.TargetType, q.TargetID, q.Body, mention); e != nil {
 			return e
 		}
+		if e := RecordEvent(r.Context(), tx, workspaceID, who.UserID, "comment", q.TargetType, q.TargetID, q.Body); e != nil {
+			return e
+		}
 		return audit.Record(r.Context(), tx, who.UserID, who.DeviceID, "workspace_comment")
 	})
 	if e != nil {
@@ -451,4 +460,61 @@ func (s *Service) resourceWorkspace(ctx context.Context, targetType, targetID st
 		return "", sql.ErrNoRows
 	}
 	return ws.String, nil
+}
+
+// RecordEvent appends a workspace activity row (branch events, shares, etc.).
+// Callers from other packages pass their own transaction; the workspace_events
+// table is only written by this package.
+func RecordEvent(ctx context.Context, tx *sql.Tx, workspaceID, userID, eventType, targetType, targetID, summary string) error {
+	if workspaceID == "" {
+		return nil
+	}
+	_, e := tx.ExecContext(ctx, `INSERT INTO workspace_events(id,workspace_id,user_id,event_type,target_type,target_id,summary) VALUES($1,$2,$3,$4,$5,$6,$7)`,
+		httpx.NewID("wevt"), workspaceID, userID, eventType, targetType, targetID, summary)
+	return e
+}
+
+// ResourceWorkspaceID returns the workspace a conversation/config asset is bound
+// to ("" when personal). Used by import flows to scope branch events.
+func ResourceWorkspaceID(ctx context.Context, q RowQueryer, table, resourceID string) (string, error) {
+	if table != "conversations" && table != "config_assets" {
+		return "", nil
+	}
+	var ws sql.NullString
+	e := q.QueryRowContext(ctx, fmt.Sprintf(`SELECT workspace_id FROM %s WHERE id=$1`, table), resourceID).Scan(&ws)
+	if e != nil || !ws.Valid {
+		return "", e
+	}
+	return ws.String, nil
+}
+
+// Feed returns the workspace activity feed (member-readable, INH-509).
+func (s *Service) Feed(w http.ResponseWriter, r *http.Request) {
+	workspaceID := r.PathValue("id")
+	if _, e := RoleFor(r.Context(), s.DB, workspaceID, auth.Who(r).UserID); e != nil {
+		httpx.Error(w, 404, "not_found", "工作区不存在")
+		return
+	}
+	rows, e := s.DB.QueryContext(r.Context(), `SELECT e.id,e.user_id,u.email,e.event_type,e.target_type,e.target_id,e.summary,e.created_at
+		FROM workspace_events e JOIN users u ON u.id=e.user_id WHERE e.workspace_id=$1 ORDER BY e.created_at DESC LIMIT 100`, workspaceID)
+	if e != nil {
+		httpx.Error(w, 503, "unavailable", "读取失败")
+		return
+	}
+	defer rows.Close()
+	out := []map[string]any{}
+	for rows.Next() {
+		var id, uid, email, eventType, targetType, targetID, summary string
+		var created time.Time
+		if e := rows.Scan(&id, &uid, &email, &eventType, &targetType, &targetID, &summary, &created); e != nil {
+			break
+		}
+		out = append(out, map[string]any{"id": id, "user_id": uid, "email": email, "event_type": eventType,
+			"target_type": targetType, "target_id": targetID, "summary": summary, "created_at": created})
+	}
+	if e := rows.Err(); e != nil {
+		httpx.Error(w, 503, "unavailable", "读取失败")
+		return
+	}
+	httpx.WriteJSON(w, 200, map[string]any{"events": out})
 }
