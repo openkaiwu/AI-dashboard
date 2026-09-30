@@ -148,3 +148,7 @@ Campaign identity: `content_hash` = provider + normalized title + normalized URL
 Time contract: `time_precision ∈ {exact, day, unknown}`; unknown means NO timestamps are stored or rendered — unknown end times are never fabricated into precise values. Precision `day` truncates to UTC midnight. Promotions already ended at submission are stored as expired; a ticker sweep archives rows whose `ends_at` passes after creation.
 
 Sources: whitelisted kinds (official_blog, pricing_page, announcement, rss, user_submit). Official kinds are trusted (confidence high) and admin-gated; user submissions are medium. RSS/Atom ingestion reuses the shared dedup path; feed dates are recorded as day precision. Confidence is provenance-derived and rendered alongside every entry.
+
+## Boundary read-grants (2026-09-30)
+
+The ownership check distinguishes writes from reads. Writes (INSERT/UPDATE) to a protected table remain locked to its owning module with no exceptions. Reads (FROM/JOIN) of a protected table default to owner-only, with an explicit per-table reader whitelist in scripts/check-boundaries.py (`read_grants`): workspace_members may be read by conversation/config for shared-scope resolution; promotions/promotion_observations/devices/conversation_imports/workspace_events may be read by telemetry for the G1 observation report. New cross-domain reads require a new whitelist entry, not a silent query.

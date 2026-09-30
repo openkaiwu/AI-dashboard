@@ -22,6 +22,7 @@ import (
 	"aihub.dev/server/internal/promotion"
 	"aihub.dev/server/internal/provider"
 	syncservice "aihub.dev/server/internal/sync"
+	"aihub.dev/server/internal/telemetry"
 	"aihub.dev/server/internal/workspace"
 )
 
@@ -70,6 +71,8 @@ func (s *Server) Handler() http.Handler {
 	})
 	mux.HandleFunc("POST /api/v1/auth/refresh", authService.Refresh)
 	mux.Handle("GET /api/v1/admin/users", authService.Middleware(authService.AdminUsers))
+	mux.Handle("GET /api/v1/admin/telemetry", authService.Middleware(s.adminTelemetry))
+	mux.Handle("GET /api/v1/admin/operations", authService.Middleware(s.adminOperations))
 	mux.Handle("POST /api/v1/admin/users", authService.Middleware(authService.AdminCreateUser))
 	mux.Handle("PATCH /api/v1/admin/users/{id}/status", authService.Middleware(authService.AdminStatus))
 	mux.Handle("POST /api/v1/admin/users/{id}/password", authService.Middleware(authService.AdminPassword))
@@ -197,6 +200,39 @@ func (s *Server) Handler() http.Handler {
 	}
 
 	return httpx.CORS(httpx.Middleware(httpx.Guard(mux)))
+}
+
+// adminTelemetry serves the G1 alpha observation report (INH-421).
+func (s *Server) adminTelemetry(w http.ResponseWriter, r *http.Request) {
+	if auth.Who(r).Role != "admin" {
+		httpx.Error(w, http.StatusForbidden, "admin_required", "观察报表仅管理员可读")
+		return
+	}
+	report, e := telemetry.Build(r.Context(), s.db)
+	if e != nil {
+		logErr("telemetry report", e, httpx.RequestID(r))
+		httpx.Error(w, http.StatusInternalServerError, "internal", "报表生成失败")
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	httpx.WriteJSON(w, 200, report)
+}
+
+// adminOperations serves self-host operations data (R3/INH-543 groundwork).
+func (s *Server) adminOperations(w http.ResponseWriter, r *http.Request) {
+	if auth.Who(r).Role != "admin" {
+		httpx.Error(w, http.StatusForbidden, "admin_required", "运维页仅管理员可读")
+		return
+	}
+	ops, e := telemetry.Operations(r.Context(), s.db)
+	if e != nil {
+		logErr("operations snapshot", e, httpx.RequestID(r))
+		httpx.Error(w, http.StatusInternalServerError, "internal", "运维快照失败")
+		return
+	}
+	ops["time"] = s.clock.Now().UTC().Format(time.RFC3339)
+	ops["request_id"] = httpx.RequestID(r)
+	httpx.WriteJSON(w, 200, ops)
 }
 
 // promotionNotify writes matched-promotion notifications; the promotion package

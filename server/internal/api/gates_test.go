@@ -269,3 +269,120 @@ func TestM2OfficialAPIConnector(t *testing.T) {
 		t.Fatalf("snapshot append wrong: %d %v", snaps, e)
 	}
 }
+
+// TestR3CriticalE2EChain is the INH-541 groundwork: one continuous chain
+// Sync -> Quota -> Connector -> Assets -> ACL exercised end to end.
+func TestR3CriticalE2EChain(t *testing.T) {
+	database := testdb.Open(t)
+	ts := server(t, database)
+	owner := login(t, ts, true, "desktop")
+	ot := owner["token"].(string)
+
+	// 1. Sync: two devices converge on a shared note with conflict resolution.
+	push(t, ts, ot, op("r3-op-1", "r3-note-1", 0, "桌面草稿", "put"))
+	conflict := push(t, ts, ot, op("r3-op-2", "r3-note-1", 0, "手机草稿", "put"))
+	if conflict["status"] != "conflict" {
+		t.Fatalf("sync conflict expected: %v", conflict)
+	}
+	if push(t, ts, ot, op("r3-op-3", "r3-note-1", 1, "手机解决稿", "put"))["status"] != "applied" {
+		t.Fatal("conflict resolution failed")
+	}
+
+	// 2. Quota: connector upload then manual correction on one account.
+	code, bridge := call(t, ts, "POST", "/api/v1/codex/bridges", ot, map[string]string{"name": "R3 bridge"})
+	if code != 201 {
+		t.Fatalf("bridge %d", code)
+	}
+	bridgeToken := bridge["token"].(string)
+	req, _ := http.NewRequest("POST", ts.URL+"/api/v1/cursor/snapshot", jsonBody(map[string]any{
+		"observed_at": time.Now().UTC().Format(time.RFC3339), "source": "cursor_api2", "status": "ok",
+		"plan_name": "Pro", "used_percent": 60.0,
+	}))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+bridgeToken)
+	if res, e := http.DefaultClient.Do(req); e != nil || res.StatusCode != 200 {
+		t.Fatalf("connector upload failed: %v", e)
+	} else {
+		res.Body.Close()
+	}
+	_, dash := call(t, ts, "GET", "/api/v1/dashboard", ot, nil)
+	var bucketID string
+	for _, a := range dash["accounts"].([]any) {
+		for _, b := range a.(map[string]any)["buckets"].([]any) {
+			bm := b.(map[string]any)
+			if st, _ := bm["source_type"].(string); st == "cursor_api2" {
+				bucketID = bm["id"].(string)
+			}
+		}
+	}
+	if bucketID == "" {
+		t.Fatal("connector bucket missing from dashboard")
+	}
+	if code, _ := call(t, ts, "POST", "/api/v1/quota-buckets/"+bucketID+"/manual-snapshot", ot,
+		map[string]any{"operation_id": "r3-manual-1", "remaining_ratio": 0.25, "source_type": "user_manual"}); code != 201 {
+		t.Fatalf("manual correction %d", code)
+	}
+
+	// 3. Assets: import a conversation and a config asset.
+	if code, _ := importFile(t, ts, ot, "codex_cli_jsonl", "testdata/codex_session.jsonl"); code != 202 {
+		t.Fatal("import rejected")
+	}
+	processImports(t, database)
+	_, convs := call(t, ts, "GET", "/api/v1/conversations", ot, nil)
+	if len(convs["conversations"].([]any)) == 0 {
+		t.Fatal("conversation missing after import")
+	}
+	code, asset := call(t, ts, "POST", "/api/v1/config-assets/import", ot,
+		map[string]string{"platform": "codex_cli", "name": "R3 配置", "content": "[mcp_servers.fs]\ncommand = \"npx\"\n"})
+	if code != 201 {
+		t.Fatalf("config asset %d %v", code, asset)
+	}
+
+	// 4. ACL: workspace share makes both readable to a member, invisible to others.
+	editorToken := loginAs(t, ts, ot, "r3-editor@example.com")["token"].(string)
+	code, ws := call(t, ts, "POST", "/api/v1/workspaces", ot, map[string]string{"name": "R3 空间"})
+	if code != 201 {
+		t.Fatal("workspace")
+	}
+	wsID := ws["id"].(string)
+	if code, _ := call(t, ts, "POST", "/api/v1/workspaces/"+wsID+"/invites", ot,
+		map[string]string{"role": "editor", "email": "r3-editor@example.com"}); code != 201 {
+		t.Fatal("invite")
+	}
+	_, invites := call(t, ts, "GET", "/api/v1/workspaces/"+wsID+"/invites", ot, nil)
+	inviteID := invites["invites"].([]any)[0].(map[string]any)["id"].(string)
+	if code, _ := call(t, ts, "POST", "/api/v1/invites/"+inviteID+"/accept", editorToken, nil); code != 200 {
+		t.Fatal("accept")
+	}
+	convID := convs["conversations"].([]any)[0].(map[string]any)["id"].(string)
+	if code, _ := call(t, ts, "PATCH", "/api/v1/conversations/"+convID, ot, map[string]any{"workspace_id": wsID}); code != 200 {
+		t.Fatalf("share conv %d", code)
+	}
+	if code, _ := call(t, ts, "GET", "/api/v1/conversations/"+convID, editorToken, nil); code != 200 {
+		t.Fatal("editor cannot read shared conversation")
+	}
+
+	// 5. Telemetry: the G1 report reflects everything that just happened.
+	if code, report := call(t, ts, "GET", "/api/v1/admin/telemetry", ot, nil); code != 200 {
+		t.Fatalf("telemetry %d", code)
+	} else {
+		if report["connectors"] == nil || report["taxonomy"] == nil || report["volume"] == nil {
+			t.Fatalf("report sections missing: %v", report)
+		}
+		volume := report["volume"].(map[string]any)
+		if num(volume["usage_snapshots"]) < 2 || num(volume["workspace_events"]) < 1 {
+			t.Fatalf("volume counters stale: %v", volume)
+		}
+	}
+	// 6. Operations: admin operations endpoint reports live system state.
+	code, ops := call(t, ts, "GET", "/api/v1/admin/operations", ot, nil)
+	if code != 200 {
+		t.Fatalf("operations %d", code)
+	}
+	if ops["database"].(map[string]any)["reachable"] != true {
+		t.Fatal("operations db not reachable")
+	}
+	if code, _ := call(t, ts, "GET", "/api/v1/admin/telemetry", editorToken, nil); code != 403 {
+		t.Fatal("non-admin read telemetry")
+	}
+}

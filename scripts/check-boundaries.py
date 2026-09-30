@@ -13,6 +13,7 @@ allowed = {
  'config': {'auth','db','httpx','workspace'},
  'workspace': {'auth','db','httpx','audit'},
  'promotion': {'auth','db','httpx'},
+ 'telemetry': set(),
 }
 errors=[]
 for p in (root/'internal').rglob('*.go'):
@@ -22,12 +23,16 @@ for p in (root/'internal').rglob('*.go'):
   if owner in allowed and target!=owner and target not in allowed[owner]: errors.append(f'{p}: disallowed {owner} -> {target}')
  if 'modernc.org/sqlite' in text: errors.append(f'{p}: SQLite server forbidden')
  for sql in re.findall(r'`([^`]+)`',text):
-  tables=set(re.findall(r'\b(?:INTO|UPDATE|FROM|JOIN)\s+([a-z_]+)',sql,re.I))
-  if tables & {'sync_notes','sync_events','sync_streams','applied_operations'} and owner!='sync': errors.append(f'{p}: sync ownership')
-  if tables & {'devices','sessions'} and owner!='auth': errors.append(f'{p}: auth ownership')
-  if tables & {'projects','conversations','conversation_branches','conversation_messages','conversation_imports','conversation_raw_snapshots'} and owner!='conversation': errors.append(f'{p}: conversation ownership')
-  if tables & {'config_assets','config_versions','config_bindings','config_discoveries'} and owner!='config': errors.append(f'{p}: config ownership')
-  if tables & {'workspaces','workspace_members','workspace_invites','workspace_comments'} and owner!='workspace': errors.append(f'{p}: workspace ownership')
-  if tables & {'promotions','promotion_sources','promotion_observations','promotion_watchlists','promotion_notifications'} and owner!='promotion': errors.append(f'{p}: promotion ownership')
+  # Writes (INTO/UPDATE) stay locked to the owning module; reads (FROM/JOIN) may be
+  # granted to explicitly whitelisted reader modules (cross-domain aggregation).
+  write_owner={'sync_notes':'sync','sync_events':'sync','sync_streams':'sync','applied_operations':'sync','devices':'auth','sessions':'auth','projects':'conversation','conversations':'conversation','conversation_branches':'conversation','conversation_messages':'conversation','conversation_imports':'conversation','conversation_raw_snapshots':'conversation','config_assets':'config','config_versions':'config','config_bindings':'config','config_discoveries':'config','workspaces':'workspace','workspace_members':'workspace','workspace_invites':'workspace','workspace_comments':'workspace','workspace_events':'workspace','promotions':'promotion','promotion_sources':'promotion','promotion_observations':'promotion','promotion_watchlists':'promotion','promotion_notifications':'promotion'}
+  read_grants={'workspace_members':{'conversation','config'},'promotions':{'telemetry'},'promotion_observations':{'telemetry'},'devices':{'telemetry'},'conversation_imports':{'telemetry'},'workspace_events':{'telemetry'}}
+  for kw,table in re.findall(r'\b(INTO|UPDATE|FROM|JOIN)\s+([a-z_]+)',sql,re.I):
+    if table not in write_owner: continue
+    if kw in ('INTO','UPDATE'):
+      if owner!=write_owner[table]: errors.append(f'{p}: {table} write ownership')
+    else:
+      if owner!=write_owner[table] and owner not in read_grants.get(table,set()):
+        errors.append(f'{p}: {table} read ownership')
 if errors: raise SystemExit('\n'.join(errors))
 print('Module dependencies and auth/sync table ownership: PASS')

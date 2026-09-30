@@ -79,6 +79,13 @@
 - **M5/INH-509**：workspace_events 活动流 + Feed API + 分支事件接入导入流程。
 - **M3**：JSONL 导出、会话内容搜索、导入器 warnings（迁移 017）。
 
+## 第三轮：G1/R3 地基（2026-09-30）
+
+- **G1/INH-421**：Alpha 观察报表已落地——`internal/telemetry` 只读聚合权威表（连接线新鲜度、额度桶 3 小时新鲜度、失败分类 taxonomy、量级计数），管理员端点 `GET /api/v1/admin/telemetry` + 管理台展示区块。设计为纯聚合，无重复记账。
+- **R3/INH-543 地基**：`GET /api/v1/admin/operations` 输出数据库可达性/迁移版本/任务队列/备份策略占位（INH-538 接入后自动反映）。
+- **R3/INH-541 地基**：`TestR3CriticalE2EChain` —— Sync（冲突+解决）→ Quota（连接器上传+手工修正）→ Assets（会话+配置导入）→ ACL（共享+成员读+越权 403）→ Telemetry/Operations 全链 E2E PASS。
+- G1 剩余：INH-425（两周真实观察窗，等 421 的报表开始积累数据后启动）→ INH-429（evidence review）。
+
 ## 本地验证记录（全部真实 PostgreSQL 14，WSL Ubuntu-22.04）
 
 | 验证项 | 结果 |
