@@ -13,7 +13,7 @@ allowed = {
  'config': {'auth','db','httpx','workspace'},
  'workspace': {'auth','db','httpx','audit'},
  'promotion': {'auth','db','httpx'},
- 'telemetry': set(),
+ 'telemetry': {'db'},
 }
 errors=[]
 for p in (root/'internal').rglob('*.go'):

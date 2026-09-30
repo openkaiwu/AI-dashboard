@@ -86,6 +86,17 @@
 - **R3/INH-541 地基**：`TestR3CriticalE2EChain` —— Sync（冲突+解决）→ Quota（连接器上传+手工修正）→ Assets（会话+配置导入）→ ACL（共享+成员读+越权 403）→ Telemetry/Operations 全链 E2E PASS。
 - G1 剩余：INH-425（两周真实观察窗，等 421 的报表开始积累数据后启动）→ INH-429（evidence review）。
 
+## 第四轮：R3 相关功能实现（2026-09-30）
+
+- **INH-540**：升级预检 + 版本拒绝——`db.Preflight` 在任何迁移前校验数据库兼容性；由更新二进制迁移过的库会被拒绝（exit 2，旧进程永不改动新 schema）；迁移保持单事务原子（失败即回滚）；新增 `AIHUB_MIGRATE_ONLY=1` 升级模式。测试：`TestPreflightVersionRejection`（隔离 schema）PASS。
+- **INH-538**：`scripts/backup.sh`（pg_dump --clean + gzip）与 `scripts/restore.sh`（二次确认 + 单事务重放）；**恢复演练自动化**：`TestR3BackupRestoreDrill` 真实 pg_dump → 破坏 schema → 恢复 → 数据回归校验 PASS；operations 端点新增备份状态（`AIHUB_BACKUP_DIR`）与升级预检结果。
+- **INH-542**：`deploy/selfhost/`——systemd 单元（含加固项）、可选 docker-compose（PostgreSQL 17 + 自动构建镜像）、`aihub.env.example`、Dockerfile（单二进制 + pg 客户端工具）。
+- **INH-544**：`scripts/security-audit.sh` 自动化 13 项检查（go vet、密钥/私钥扫描、注册关闭、桥接设备校验、令牌哈希、secret_ref、扩展无 cookie、CORS、raw 快照隔离）——当前 PASS；人工清单在运维手册。
+- **INH-545**：`docs/OPERATIONS_ZH.md` 运维手册——安装/升级/备份恢复/观测/安全审计 + Release Checklist。
+- **INH-543/541**：operations 端点与关键链 E2E 地基已就位（上一轮），本轮扩展备份状态与预检字段。
+
+R3 剩余：INH-546（清洁安装 Human Gate——需真实机器按手册走完整发布流程）与 541/543 的收尾扩展。
+
 ## 本地验证记录（全部真实 PostgreSQL 14，WSL Ubuntu-22.04）
 
 | 验证项 | 结果 |

@@ -74,3 +74,59 @@ func Migrate(ctx context.Context, database *sql.DB) error {
 		return nil
 	})
 }
+
+// PreflightReport summarizes upgrade preflight (R3/INH-540).
+type PreflightReport struct {
+	Applied         int      `json:"applied"`
+	Recognized      int      `json:"recognized"`
+	UnknownVersions []string `json:"unknown_versions,omitempty"`
+	Compatible      bool     `json:"compatible"`
+}
+
+// Preflight verifies the database is compatible with this binary BEFORE any
+// migration runs. A database migrated by a NEWER binary is refused, so an old
+// process can never mutate newer schema state (version rejection path).
+// Migration itself stays atomic (single transaction): a failed upgrade leaves
+// the previous schema fully intact — that is the rollback path.
+func Preflight(ctx context.Context, database *sql.DB) (*PreflightReport, error) {
+	report := &PreflightReport{Compatible: true}
+	var table bool
+	if e := database.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM information_schema.tables WHERE table_schema=current_schema() AND table_name='schema_migrations')`).Scan(&table); e != nil {
+		return nil, e
+	}
+	if !table {
+		return report, nil // fresh database: nothing to reject
+	}
+	entries, err := migrations.FS.ReadDir(".")
+	if err != nil {
+		return nil, err
+	}
+	embedded := map[string]bool{}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			embedded[entry.Name()] = true
+		}
+	}
+	rows, err := database.QueryContext(ctx, `SELECT version FROM schema_migrations`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var v string
+		if err := rows.Scan(&v); err != nil {
+			return nil, err
+		}
+		report.Applied++
+		if embedded[v] {
+			report.Recognized++
+		} else {
+			report.UnknownVersions = append(report.UnknownVersions, v)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	report.Compatible = len(report.UnknownVersions) == 0
+	return report, nil
+}

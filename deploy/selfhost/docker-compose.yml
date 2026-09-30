@@ -1,0 +1,33 @@
+# Optional Compose deployment (R3/INH-542). The core needs only the single
+# aihub binary + PostgreSQL; Compose is a convenience, not a requirement.
+services:
+  db:
+    image: postgres:17
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_DB: aihub
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./backups:/backups
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  aihub:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      AIHUB_ADDR: 0.0.0.0:8080
+      AIHUB_DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD}@db:5432/aihub?sslmode=disable
+      AIHUB_BACKUP_DIR: /backups
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./backups:/backups
+
+volumes:
+  pgdata:

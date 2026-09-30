@@ -19,7 +19,7 @@ func TestConfigPortabilitySecretHygieneTransformAndRollback(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	secret := "sk-super-secret-value-123"
+	secret := "fixture-not-a-real-secret-value"
 	leak := func(phase string, body []byte) {
 		if bytes.Contains(body, []byte(secret)) {
 			t.Fatalf("%s leaked the secret value: %s", phase, body)

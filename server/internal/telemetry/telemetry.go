@@ -7,7 +7,11 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"os"
+	"strings"
 	"time"
+
+	"aihub.dev/server/internal/db"
 )
 
 // Failure taxonomy (frozen v1) — every class maps to a queryable condition:
@@ -31,10 +35,10 @@ type ConnectorLine struct {
 }
 
 type FreshnessSummary struct {
-	Buckets        int      `json:"buckets"`
-	Fresh          int      `json:"fresh"`
-	Stale          int      `json:"stale"`
-	OldestSnapshot *string  `json:"oldest_snapshot,omitempty"`
+	Buckets        int     `json:"buckets"`
+	Fresh          int     `json:"fresh"`
+	Stale          int     `json:"stale"`
+	OldestSnapshot *string `json:"oldest_snapshot,omitempty"`
 }
 
 type FailureClass struct {
@@ -44,39 +48,39 @@ type FailureClass struct {
 }
 
 type VolumeSummary struct {
-	Users             int   `json:"users"`
-	Devices           int   `json:"devices"`
-	UsageSnapshots    int   `json:"usage_snapshots"`
-	NotificationsSent int   `json:"notifications_sent"`
-	NotificationDupes int   `json:"notification_dupes"`
-	ImportsCompleted  int   `json:"imports_completed"`
-	ImportsFailed     int   `json:"imports_failed"`
-	JobRetries        int   `json:"job_retries"`
-	Promotions        int   `json:"promotions"`
-	PromotionSightings int  `json:"promotion_sightings"`
-	WorkspaceEvents   int   `json:"workspace_events"`
-	Shares            int   `json:"resource_shares"`
+	Users              int `json:"users"`
+	Devices            int `json:"devices"`
+	UsageSnapshots     int `json:"usage_snapshots"`
+	NotificationsSent  int `json:"notifications_sent"`
+	NotificationDupes  int `json:"notification_dupes"`
+	ImportsCompleted   int `json:"imports_completed"`
+	ImportsFailed      int `json:"imports_failed"`
+	JobRetries         int `json:"job_retries"`
+	Promotions         int `json:"promotions"`
+	PromotionSightings int `json:"promotion_sightings"`
+	WorkspaceEvents    int `json:"workspace_events"`
+	Shares             int `json:"resource_shares"`
 }
 
 // Build aggregates the whole report. Every query is bounded and read-only.
-func Build(ctx context.Context, db *sql.DB) (*Report, error) {
+func Build(ctx context.Context, database *sql.DB) (*Report, error) {
 	r := &Report{GeneratedAt: time.Now().UTC()}
-	if e := r.connectors(ctx, db); e != nil {
+	if e := r.connectors(ctx, database); e != nil {
 		return nil, e
 	}
-	if e := r.freshness(ctx, db); e != nil {
+	if e := r.freshness(ctx, database); e != nil {
 		return nil, e
 	}
-	if e := r.volume(ctx, db); e != nil {
+	if e := r.volume(ctx, database); e != nil {
 		return nil, e
 	}
 	r.taxonomy()
 	return r, nil
 }
 
-func (r *Report) connectors(ctx context.Context, db *sql.DB) error {
+func (r *Report) connectors(ctx context.Context, database *sql.DB) error {
 	// Each acquisition line reports its own evidence table; bridge pairing is separate.
-	rows, e := db.QueryContext(ctx, `
+	rows, e := database.QueryContext(ctx, `
 		SELECT 'codex' AS slug,
 		  (SELECT count(*) FROM codex_bridges WHERE revoked_at IS NULL) AS bridges,
 		  (SELECT max(observed_at::timestamptz) FROM codex_history)
@@ -110,8 +114,8 @@ func (r *Report) connectors(ctx context.Context, db *sql.DB) error {
 	return rows.Err()
 }
 
-func (r *Report) freshness(ctx context.Context, db *sql.DB) error {
-	e := db.QueryRowContext(ctx, `
+func (r *Report) freshness(ctx context.Context, database *sql.DB) error {
+	e := database.QueryRowContext(ctx, `
 		SELECT count(*),
 		  count(*) FILTER (WHERE latest >= now() - interval '3 hours'),
 		  count(*) FILTER (WHERE latest < now() - interval '3 hours'),
@@ -126,9 +130,9 @@ func (r *Report) freshness(ctx context.Context, db *sql.DB) error {
 	return e
 }
 
-func (r *Report) volume(ctx context.Context, db *sql.DB) error {
+func (r *Report) volume(ctx context.Context, database *sql.DB) error {
 	scan := func(q string, dst *int) error {
-		return db.QueryRowContext(ctx, q).Scan(dst)
+		return database.QueryRowContext(ctx, q).Scan(dst)
 	}
 	steps := []struct {
 		q   string
@@ -170,11 +174,9 @@ func (r *Report) taxonomy() {
 	if r.Volume.NotificationDupes > 0 {
 		r.Taxonomy = append(r.Taxonomy, FailureClass{Class: "notification_dup", Count: r.Volume.NotificationDupes, Note: "同 dedupe_key 的重复通知（应为 0）"})
 	}
-	if len(r.Connectors) > 0 {
-		for _, c := range r.Connectors {
-			if c.Bridges > 0 && (c.LastReceive == nil || time.Since(*c.LastReceive) > time.Hour) {
-				r.Taxonomy = append(r.Taxonomy, FailureClass{Class: "connector_stale", Count: c.Bridges, Note: fmt.Sprintf("%s 连接器超过 1 小时未上报", c.Slug)})
-			}
+	for _, c := range r.Connectors {
+		if c.Bridges > 0 && (c.LastReceive == nil || time.Since(*c.LastReceive) > time.Hour) {
+			r.Taxonomy = append(r.Taxonomy, FailureClass{Class: "connector_stale", Count: c.Bridges, Note: fmt.Sprintf("%s 连接器超过 1 小时未上报", c.Slug)})
 		}
 	}
 	if len(r.Taxonomy) == 0 {
@@ -182,24 +184,55 @@ func (r *Report) taxonomy() {
 	}
 }
 
-// Operations is the self-host operations snapshot (R3/INH-543 groundwork).
-func Operations(ctx context.Context, db *sql.DB) (map[string]any, error) {
+// Operations is the self-host operations snapshot (R3/INH-543 groundwork):
+// database/migration state, upgrade preflight, job queue and backup status.
+func Operations(ctx context.Context, database *sql.DB) (map[string]any, error) {
 	out := map[string]any{}
+	preflight, e := db.Preflight(ctx, database)
+	if e != nil {
+		out["upgrade_preflight"] = map[string]any{"compatible": false, "error": e.Error()}
+	} else {
+		out["upgrade_preflight"] = map[string]any{"compatible": preflight.Compatible, "unknown_versions": preflight.UnknownVersions}
+	}
+	backupDir := os.Getenv("AIHUB_BACKUP_DIR")
+	backup := map[string]any{"configured": false, "dir": "", "last_backup": nil, "note": "设置 AIHUB_BACKUP_DIR 后运行 scripts/backup.sh，此处显示最近一次备份"}
+	if backupDir != "" {
+		backup["configured"] = true
+		backup["dir"] = backupDir
+		if entries, err := os.ReadDir(backupDir); err == nil {
+			var newest string
+			var newestAt time.Time
+			for _, entry := range entries {
+				if entry.IsDir() || !strings.HasPrefix(entry.Name(), "aihub-backup-") {
+					continue
+				}
+				info, err := entry.Info()
+				if err == nil && info.ModTime().After(newestAt) {
+					newest = entry.Name()
+					newestAt = info.ModTime()
+				}
+			}
+			if newest != "" {
+				backup["last_backup"] = newestAt.UTC().Format(time.RFC3339)
+				backup["last_backup_file"] = newest
+			}
+		}
+	}
+	out["backup"] = backup
 	reachable := true
-	if e := db.PingContext(ctx); e != nil {
+	if e := database.PingContext(ctx); e != nil {
 		reachable = false
 	}
 	var pending, retried, users, devicesN, migrations int
-	_ = db.QueryRowContext(ctx, `SELECT count(*) FROM jobs WHERE completed_at IS NULL`).Scan(&pending)
-	_ = db.QueryRowContext(ctx, `SELECT count(*) FROM jobs WHERE attempts > 1 AND completed_at IS NULL`).Scan(&retried)
-	_ = db.QueryRowContext(ctx, `SELECT count(*) FROM users`).Scan(&users)
-	_ = db.QueryRowContext(ctx, `SELECT count(*) FROM devices`).Scan(&devicesN)
-	_ = db.QueryRowContext(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&migrations)
+	_ = database.QueryRowContext(ctx, `SELECT count(*) FROM jobs WHERE completed_at IS NULL`).Scan(&pending)
+	_ = database.QueryRowContext(ctx, `SELECT count(*) FROM jobs WHERE attempts > 1 AND completed_at IS NULL`).Scan(&retried)
+	_ = database.QueryRowContext(ctx, `SELECT count(*) FROM users`).Scan(&users)
+	_ = database.QueryRowContext(ctx, `SELECT count(*) FROM devices`).Scan(&devicesN)
+	_ = database.QueryRowContext(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&migrations)
 	var latest string
-	_ = db.QueryRowContext(ctx, `SELECT COALESCE(max(version),'') FROM schema_migrations`).Scan(&latest)
+	_ = database.QueryRowContext(ctx, `SELECT COALESCE(max(version),'') FROM schema_migrations`).Scan(&latest)
 	out["database"] = map[string]any{"reachable": reachable, "migrations_applied": migrations, "latest_migration": latest}
 	out["jobs"] = map[string]any{"pending": pending, "retried": retried}
 	out["accounts"] = map[string]any{"users": users, "devices": devicesN}
-	out["backup"] = map[string]any{"configured": false, "note": "自部署实例：备份策略由运维方配置（R3/INH-538 接入后此处自动反映）"}
 	return out, nil
 }

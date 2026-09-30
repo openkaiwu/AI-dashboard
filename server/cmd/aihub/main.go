@@ -8,6 +8,7 @@ import (
 	"aihub.dev/server/internal/db"
 	"aihub.dev/server/internal/promotion"
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -31,9 +32,25 @@ func main() {
 	defer database.Close()
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	// Upgrade preflight (R3/INH-540): refuse to run when the database was
+	// migrated by a newer binary; the version-rejection path exits before
+	// any schema change. Migration itself is atomic (rollback on failure).
+	preflight, e := db.Preflight(ctx, database)
+	if e != nil {
+		slog.Error("upgrade preflight failed", "error", e.Error())
+		os.Exit(1)
+	}
+	if !preflight.Compatible {
+		slog.Error("database was migrated by a newer binary; refusing to start", "unknown_versions", fmt.Sprint(preflight.UnknownVersions))
+		os.Exit(2)
+	}
 	if e = db.Migrate(ctx, database); e != nil {
 		slog.Error("migration failed", "error", e.Error())
 		os.Exit(1)
+	}
+	if os.Getenv("AIHUB_MIGRATE_ONLY") == "1" {
+		slog.Info("migration-only mode complete", "applied", preflight.Applied)
+		return
 	}
 	if e = api.SeedProviders(ctx, database); e != nil {
 		slog.Error("provider seed failed")

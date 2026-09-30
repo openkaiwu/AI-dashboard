@@ -1,0 +1,22 @@
+[Unit]
+Description=AI Hub aggregation server (single binary + PostgreSQL)
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=aihub
+WorkingDirectory=/opt/aihub
+EnvironmentFile=/opt/aihub/aihub.env
+ExecStart=/opt/aihub/aihub
+Restart=on-failure
+RestartSec=5
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/aihub
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
