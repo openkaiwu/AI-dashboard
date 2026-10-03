@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -91,9 +92,9 @@ func (s *Service) Upload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback()
-	var bridgeID, deviceID string
+	var bridgeID, deviceID, bridgeOwner string
 	var old []byte
-	e = tx.QueryRowContext(r.Context(), `SELECT b.id,b.device_id,b.snapshot FROM codex_bridges b WHERE b.token_hash=$1 AND b.revoked_at IS NULL FOR UPDATE`, auth.Hash(strings.TrimPrefix(header, "Bearer "))).Scan(&bridgeID, &deviceID, &old)
+	e = tx.QueryRowContext(r.Context(), `SELECT b.id,b.device_id,b.user_id,b.snapshot FROM codex_bridges b WHERE b.token_hash=$1 AND b.revoked_at IS NULL FOR UPDATE`, auth.Hash(strings.TrimPrefix(header, "Bearer "))).Scan(&bridgeID, &deviceID, &bridgeOwner, &old)
 	if errors.Is(e, sql.ErrNoRows) {
 		httpx.Error(w, 401, "bridge_revoked", "连接已撤销，请重新配对")
 		return
@@ -136,7 +137,38 @@ func (s *Service) Upload(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, 503, "unavailable", "保存失败")
 		return
 	}
+	if applied && q.News != nil {
+		s.promoteGlobalNews(r.Context(), bridgeOwner, q.News)
+	}
 	httpx.WriteJSON(w, 200, map[string]bool{"ok": true, "applied": applied})
+}
+
+// promoteGlobalNews copies verified radar news from an administrator's bridge
+// snapshot into the single global row, making the reset radar visible to every
+// account. Best effort by design: a failed promotion never affects the quota
+// ingest that already committed. Only newer checks replace the global row so a
+// delayed retry cannot roll the radar back.
+func (s *Service) promoteGlobalNews(ctx context.Context, ownerID string, news *codex.News) {
+	var role string
+	if e := s.DB.QueryRowContext(ctx, `SELECT role FROM users WHERE id=$1 AND account_status='active'`, ownerID).Scan(&role); e != nil || role != "admin" {
+		return
+	}
+	var current []byte
+	if e := s.DB.QueryRowContext(ctx, `SELECT payload FROM global_codex_news WHERE id=1`).Scan(&current); e == nil {
+		var existing codex.News
+		if json.Unmarshal(current, &existing) == nil && news.CheckedAt.Before(existing.CheckedAt) {
+			return
+		}
+	} else if !errors.Is(e, sql.ErrNoRows) {
+		return
+	}
+	payload, e := json.Marshal(news)
+	if e != nil {
+		return
+	}
+	if _, e = s.DB.ExecContext(ctx, `INSERT INTO global_codex_news(id,payload,source_user_id,refreshed_at) VALUES(1,$1,$2,now()) ON CONFLICT (id) DO UPDATE SET payload=excluded.payload,source_user_id=excluded.source_user_id,refreshed_at=now()`, payload, ownerID); e != nil {
+		slog.Warn("global news promotion skipped", "error", e)
+	}
 }
 func (s *Service) List(w http.ResponseWriter, r *http.Request) {
 	plan, _, pe := getPlan(r.Context(), s.DB, auth.Who(r).UserID)

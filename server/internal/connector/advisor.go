@@ -113,6 +113,7 @@ func (s *Service) Evaluate(ctx context.Context, uid string, now time.Time) (map[
 	if _, e = tx.ExecContext(ctx, `UPDATE codex_alerts SET active=false WHERE user_id=$1`, uid); e != nil {
 		return nil, e
 	}
+	global := globalNews(ctx, tx)
 	reports := []map[string]any{}
 	for _, d := range devices {
 		history := []codex.Snapshot{}
@@ -138,6 +139,7 @@ func (s *Service) Evaluate(ctx context.Context, uid string, now time.Time) (map[
 		if e != nil {
 			return nil, e
 		}
+		d.Snapshot = fillNews(d.Snapshot, global)
 		a := codex.Analyze(d.Snapshot, history, p, now)
 		reports = append(reports, map[string]any{"id": d.ID, "name": d.Name, "snapshot": d.Snapshot, "analysis": a, "history": history})
 		if p.Enabled {
@@ -192,5 +194,31 @@ func (s *Service) Evaluate(ctx context.Context, uid string, now time.Time) (map[
 	if e = tx.Commit(); e != nil {
 		return nil, e
 	}
-	return map[string]any{"generated_at": now, "preferences": p, "quiet": p.Quiet(now), "devices": reports, "alerts": alerts, "plan": map[string]string{"plan_type": plan, "source_type": planSource}}, nil
+	return map[string]any{"generated_at": now, "preferences": p, "quiet": p.Quiet(now), "devices": reports, "alerts": alerts, "news": global, "plan": map[string]string{"plan_type": plan, "source_type": planSource}}, nil
+}
+
+// globalNews reads the promoted reset-radar news (admin bridge snapshots);
+// nil when nothing has been promoted yet or the row is unreadable.
+func globalNews(ctx context.Context, tx *sql.Tx) *codex.News {
+	var raw []byte
+	if e := tx.QueryRowContext(ctx, `SELECT payload FROM global_codex_news WHERE id=1`).Scan(&raw); e != nil || len(raw) == 0 {
+		return nil
+	}
+	var n codex.News
+	if json.Unmarshal(raw, &n) != nil {
+		return nil
+	}
+	return &n
+}
+
+// fillNews lets the promoted global radar back a device that has no news of
+// its own (or only an older check); a device's own newer check always wins.
+func fillNews(s codex.Snapshot, global *codex.News) codex.Snapshot {
+	if global == nil {
+		return s
+	}
+	if s.News == nil || s.News.CheckedAt.Before(global.CheckedAt) {
+		s.News = global
+	}
+	return s
 }

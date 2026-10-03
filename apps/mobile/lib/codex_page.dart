@@ -427,13 +427,13 @@ class _CodexPageState extends State<CodexPage>
     }
   }
 
-  Widget radarTab(Json? d) {
+  Widget radarTab(Json? d, Json? overview) {
     final metrics = (d?['analysis']?['metrics'] as List?)?.cast<Json>() ?? [];
-    final news = d?['snapshot']?['news'] as Json?;
+    final news = (d?['snapshot']?['news'] ?? overview?['news']) as Json?;
     final items = (news?['items'] as List?)?.cast<Json>() ?? [];
     final checkedAt = DateTime.tryParse(news?['checked_at']?.toString() ?? '');
     final expired =
-        checkedAt == null || DateTime.now().difference(checkedAt).inHours >= 3;
+        checkedAt == null || DateTime.now().difference(checkedAt).inMinutes >= 45;
     final status = news == null
         ? '尚未检查'
         : expired
@@ -453,7 +453,7 @@ class _CodexPageState extends State<CodexPage>
       if (metrics.every((m) => m['resets_at'] == null))
         const Text('暂无可核实的重置时间。'),
       const SizedBox(height: 16),
-      Text('Tibo 重置消息 · 每 3 小时检查',
+      Text('Tibo 重置消息 · 自动检查',
           style: Theme.of(context).textTheme.titleMedium),
       Text(status,
           style: TextStyle(
@@ -703,7 +703,7 @@ class _CodexPageState extends State<CodexPage>
             ListView(children: [overviewTab(d, isStale)]),
             ListView(children: [planTab(d, isStale)]),
             ListView(children: [remindersTab()]),
-            ListView(children: [radarTab(d)]),
+            ListView(children: [radarTab(d, overview)]),
             ListView(children: [settingsTab()]),
           ],
         ),
