@@ -141,6 +141,11 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ email, password, device_name, device_kind: window.aihubDesktop ? "desktop" : "web_admin", installation_id: installationID() }),
     }),
+  register: (invite_code: string, email: string, password: string, note: string) =>
+    request<{ status: string; message: string }>("/api/v1/auth/register", {
+      method: "POST",
+      body: JSON.stringify({ invite_code, email, password, note }),
+    }),
   me: () => request<{ id: string; email: string; unread_count: number }>("/api/v1/me"),
   dashboard: () => request<Dashboard>("/api/v1/dashboard"),
   providers: () => request<{ providers: Provider[] }>("/api/v1/providers"),

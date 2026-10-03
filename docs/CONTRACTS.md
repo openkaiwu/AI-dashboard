@@ -139,7 +139,7 @@ Roles: owner (membership control, delete), editor (read + comment), viewer (read
 
 Invites are by email of an existing account, role-bound, pending until accepted by the matching session; acceptance and revocation are explicit. Sharing is per-resource (`workspace_id` on the row); the ownership check for the membership table stays inside the workspace package via `workspace.ReadableScope`.
 
-Change hints v1 are Server-Sent Events (`GET /api/v1/change-hints`): per-user in-memory buffer (256 events), `Last-Event-ID` replay after reconnect, coarse pointers only in payloads (never resource contents). The WebSocket upgrade for INH-513 is a delivery swap with identical semantics, not a contract change.
+Change hints v1 live on one route (`GET /api/v1/change-hints`) with two interchangeable deliveries (INH-513 closed 2026-10-02): Server-Sent Events and a WebSocket upgrade. Both carry identical semantics — per-user in-memory buffer (256 events), hello marker on connect, `Last-Event-ID` replay after reconnect (WebSocket clients may also pass `last_event_id` as a query parameter; the bearer token may arrive as `access_token` on the same query because browsers cannot set WS headers), coarse pointers only in payloads (never resource contents). Clients prefer WebSocket and fall back to SSE.
 
 ## Promotion intelligence v1 (M6, 2026-09-29)
 

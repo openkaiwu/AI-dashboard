@@ -14,9 +14,8 @@ import (
 )
 
 // Hub is the v1 change-hint transport (INH-513): Server-Sent Events with an
-// in-memory per-user replay buffer. SSE carries the same change-hint semantics
-// as the planned WebSocket (push + Last-Event-ID resume); the WS upgrade is a
-// delivery detail deferred to the INH-513 closure.
+// in-memory per-user replay buffer, plus the WebSocket delivery swap on the
+// same route and semantics (hello, Last-Event-ID resume, coarse pointers only).
 type Hub struct {
 	mu      sync.Mutex
 	subs    map[string]map[chan Event]struct{}
@@ -71,16 +70,12 @@ func (h *Hub) PublishToWorkspace(ctx context.Context, database *sql.DB, workspac
 	}
 }
 
-// Stream serves the SSE channel: hello, replay after Last-Event-ID, live events.
-func (h *Hub) Stream(w http.ResponseWriter, r *http.Request) {
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
-		return
-	}
-	userID := auth.Who(r).UserID
+// subscribe registers a live channel for the user and returns the replay
+// backlog plus the hello marker; lastEventID resumes after a reconnect.
+func (h *Hub) subscribe(userID, lastEventID string) (chan Event, []Event, Event) {
 	ch := make(chan Event, 32)
 	h.mu.Lock()
+	defer h.mu.Unlock()
 	h.nextSeq[userID]++
 	hello := Event{Seq: h.nextSeq[userID], Type: "hello", At: time.Now().UTC()}
 	h.buffer[userID] = append(h.buffer[userID], hello)
@@ -92,8 +87,8 @@ func (h *Hub) Stream(w http.ResponseWriter, r *http.Request) {
 	}
 	h.subs[userID][ch] = struct{}{}
 	var last uint64
-	if v := r.Header.Get("Last-Event-ID"); v != "" {
-		last, _ = strconv.ParseUint(v, 10, 64)
+	if lastEventID != "" {
+		last, _ = strconv.ParseUint(lastEventID, 10, 64)
 	}
 	pending := make([]Event, 0, len(h.buffer[userID]))
 	for _, ev := range h.buffer[userID] {
@@ -101,7 +96,31 @@ func (h *Hub) Stream(w http.ResponseWriter, r *http.Request) {
 			pending = append(pending, ev)
 		}
 	}
+	return ch, pending, hello
+}
+
+func (h *Hub) unsubscribe(userID string, ch chan Event) {
+	h.mu.Lock()
+	delete(h.subs[userID], ch)
 	h.mu.Unlock()
+}
+
+// Stream serves the change-hints channel: WebSocket when the request upgrades,
+// Server-Sent Events otherwise. Both carry identical hello, replay and live
+// semantics; the event payload stays coarse pointers only.
+func (h *Hub) Stream(w http.ResponseWriter, r *http.Request) {
+	if isWebSocketUpgrade(r) {
+		h.streamWebSocket(w, r)
+		return
+	}
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+	userID := auth.Who(r).UserID
+	ch, pending, hello := h.subscribe(userID, r.Header.Get("Last-Event-ID"))
+	defer h.unsubscribe(userID, ch)
 
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-store")
@@ -118,9 +137,6 @@ func (h *Hub) Stream(w http.ResponseWriter, r *http.Request) {
 	for {
 		select {
 		case <-r.Context().Done():
-			h.mu.Lock()
-			delete(h.subs[userID], ch)
-			h.mu.Unlock()
 			return
 		case <-heartbeat.C:
 			fmt.Fprint(w, ": ping\n\n")

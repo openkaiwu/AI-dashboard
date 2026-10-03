@@ -12,7 +12,7 @@ func TestDeviceBindingAndManualRetry(t *testing.T) {
 	ts := server(t, database)
 	admin := login(t, ts, true, "owner")
 	token := admin["token"].(string)
-	if code, _ := call(t, ts, "POST", "/api/v1/auth/register", "", map[string]string{}); code != 403 {
+	if code, _ := call(t, ts, "POST", "/api/v1/auth/register", "", map[string]string{}); code != 400 {
 		t.Fatalf("registration %d", code)
 	}
 	const contenders = 2

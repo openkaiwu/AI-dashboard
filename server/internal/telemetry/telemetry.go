@@ -223,16 +223,17 @@ func Operations(ctx context.Context, database *sql.DB) (map[string]any, error) {
 	if e := database.PingContext(ctx); e != nil {
 		reachable = false
 	}
-	var pending, retried, users, devicesN, migrations int
+	var pending, retried, users, devicesN, migrations, pendingRegs int
 	_ = database.QueryRowContext(ctx, `SELECT count(*) FROM jobs WHERE completed_at IS NULL`).Scan(&pending)
 	_ = database.QueryRowContext(ctx, `SELECT count(*) FROM jobs WHERE attempts > 1 AND completed_at IS NULL`).Scan(&retried)
 	_ = database.QueryRowContext(ctx, `SELECT count(*) FROM users`).Scan(&users)
-	_ = database.QueryRowContext(ctx, `SELECT count(*) FROM devices`).Scan(&devicesN)
+	_ = database.QueryRowContext(ctx, `SELECT count(*) FROM devices WHERE revoked_at IS NULL AND kind IN ('desktop','mobile')`).Scan(&devicesN)
 	_ = database.QueryRowContext(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&migrations)
+	_ = database.QueryRowContext(ctx, `SELECT count(*) FROM registration_applications WHERE status='pending'`).Scan(&pendingRegs)
 	var latest string
 	_ = database.QueryRowContext(ctx, `SELECT COALESCE(max(version),'') FROM schema_migrations`).Scan(&latest)
 	out["database"] = map[string]any{"reachable": reachable, "migrations_applied": migrations, "latest_migration": latest}
 	out["jobs"] = map[string]any{"pending": pending, "retried": retried}
-	out["accounts"] = map[string]any{"users": users, "devices": devicesN}
+	out["accounts"] = map[string]any{"users": users, "devices": devicesN, "pending_registrations": pendingRegs}
 	return out, nil
 }

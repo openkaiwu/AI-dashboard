@@ -24,6 +24,7 @@ import CursorOverview from "./pages/CursorOverview";
 import { ActiveProvider, getActiveProvider, hasActiveProvider, providerLabel, setActiveProvider } from "./providerMode";
 import { flushManual, pendingManualCount, clearManualQueue } from "./manualQueue";
 import {loadState,clearSyncState} from "./sync";
+import {subscribeChangeHints} from "./changeHints";
 
 export default function App() {
   return (
@@ -81,6 +82,11 @@ function Shell() {
     const sync=()=>{if(getSession() && navigator.onLine) void flushManual().catch(()=>{});};
     sync();window.addEventListener('online',sync);const timer=setInterval(sync,60000);
     return()=>{window.removeEventListener('online',sync);clearInterval(timer);};
+  },[]);
+  useEffect(()=>{
+    if(!getToken())return;
+    const stop=subscribeChangeHints(ev=>{window.dispatchEvent(new CustomEvent("aihub-change-hint",{detail:ev}));});
+    return stop;
   },[]);
 
   async function logout() {

@@ -53,9 +53,6 @@ func session(ctx context.Context, tx *sql.Tx, user, device, email string) (Sessi
 	_, err := tx.ExecContext(ctx, `INSERT INTO sessions(access_hash,refresh_hash,user_id,device_id,access_expires,refresh_expires) VALUES($1,$2,$3,$4,$5,$6)`, Hash(out.Token), Hash(out.RefreshToken), user, device, out.ExpiresAt, now.Add(30*24*time.Hour))
 	return out, err
 }
-func (s *Service) Register(w http.ResponseWriter, r *http.Request) {
-	httpx.Error(w, 403, "registration_closed", "账户由管理员授权，请联系管理员")
-}
 func (s *Service) Login(w http.ResponseWriter, r *http.Request) { s.signIn(w, r) }
 func (s *Service) signIn(w http.ResponseWriter, r *http.Request) {
 	var q credentials
@@ -84,18 +81,26 @@ func (s *Service) signIn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if status != "active" || (q.DeviceKind == "web_admin" && role != "admin") {
-		httpx.Error(w, 403, "account_not_authorized", "账户尚未获授权或已停用")
+		if status == "pending" {
+			httpx.Error(w, 403, "account_pending", "账户正在等待管理员审核")
+		} else {
+			httpx.Error(w, 403, "account_not_authorized", "账户尚未获授权或已停用")
+		}
 		return
 	}
 	var out Session
 	occupied := errors.New("device slot occupied")
 	unauthorized := errors.New("account not active")
+	pendingReview := errors.New("account pending review")
 	err = db.Tx(r.Context(), s.DB, func(tx *sql.Tx) error {
 		var currentStatus string
 		if e := tx.QueryRowContext(r.Context(), `SELECT account_status FROM users WHERE id=$1 FOR UPDATE`, uid).Scan(&currentStatus); e != nil {
 			return e
 		}
 		if currentStatus != "active" {
+			if currentStatus == "pending" {
+				return pendingReview
+			}
 			return unauthorized
 		}
 		var did, existingHash string
@@ -129,6 +134,8 @@ func (s *Service) signIn(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if errors.Is(err, occupied) {
 			httpx.Error(w, 409, "device_slot_occupied", "此类设备已绑定，请联系管理员解绑")
+		} else if errors.Is(err, pendingReview) {
+			httpx.Error(w, 403, "account_pending", "账户正在等待管理员审核")
 		} else if errors.Is(err, unauthorized) {
 			httpx.Error(w, 403, "account_not_authorized", "账户尚未获授权或已停用")
 		} else {
@@ -225,7 +232,7 @@ func (s *Service) Refresh(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, 200, out)
 }
 func (s *Service) Devices(w http.ResponseWriter, r *http.Request) {
-	rows, e := s.DB.QueryContext(r.Context(), `SELECT id,name,kind,created_at,revoked_at FROM devices WHERE user_id=$1 ORDER BY created_at DESC`, Who(r).UserID)
+	rows, e := s.DB.QueryContext(r.Context(), `SELECT id,name,kind,created_at,revoked_at FROM devices WHERE user_id=$1 AND revoked_at IS NULL AND kind IN ('desktop','mobile') ORDER BY kind`, Who(r).UserID)
 	if e != nil {
 		httpx.Error(w, 500, "internal", "无法读取设备")
 		return

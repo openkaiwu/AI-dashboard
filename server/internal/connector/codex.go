@@ -36,7 +36,21 @@ func (s *Service) Create(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, 503, "unavailable", "无法创建连接")
 		return
 	}
-	if _, e := s.DB.ExecContext(r.Context(), `INSERT INTO codex_bridges(id,user_id,name,token_hash,device_id) VALUES($1,$2,$3,$4,$5)`, id, uid, strings.TrimSpace(q.Name), auth.Hash(token), auth.Who(r).DeviceID); e != nil {
+	tx, e := s.DB.BeginTx(r.Context(), nil)
+	if e != nil {
+		httpx.Error(w, 503, "unavailable", "无法创建连接")
+		return
+	}
+	defer tx.Rollback()
+	if _, e = tx.ExecContext(r.Context(), `UPDATE codex_bridges SET revoked_at=now() WHERE user_id=$1 AND revoked_at IS NULL`, uid); e != nil {
+		httpx.Error(w, 503, "unavailable", "无法创建连接")
+		return
+	}
+	if _, e = tx.ExecContext(r.Context(), `INSERT INTO codex_bridges(id,user_id,name,token_hash,device_id) VALUES($1,$2,$3,$4,$5)`, id, uid, strings.TrimSpace(q.Name), auth.Hash(token), auth.Who(r).DeviceID); e != nil {
+		httpx.Error(w, 503, "unavailable", "无法创建连接")
+		return
+	}
+	if e = tx.Commit(); e != nil {
 		httpx.Error(w, 503, "unavailable", "无法创建连接")
 		return
 	}
@@ -130,7 +144,7 @@ func (s *Service) List(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, 503, "unavailable", "读取失败")
 		return
 	}
-	rows, e := s.DB.QueryContext(r.Context(), `SELECT id,name,revoked_at,received_at,snapshot FROM codex_bridges WHERE user_id=$1 ORDER BY created_at DESC`, auth.Who(r).UserID)
+	rows, e := s.DB.QueryContext(r.Context(), `SELECT id,name,revoked_at,received_at,snapshot FROM codex_bridges WHERE user_id=$1 AND revoked_at IS NULL ORDER BY created_at DESC LIMIT 1`, auth.Who(r).UserID)
 	if e != nil {
 		httpx.Error(w, 503, "unavailable", "读取失败")
 		return

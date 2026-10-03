@@ -78,6 +78,12 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/admin/users/{id}/password", authService.Middleware(authService.AdminPassword))
 	mux.Handle("GET /api/v1/admin/users/{id}/devices", authService.Middleware(authService.AdminDevices))
 	mux.Handle("DELETE /api/v1/admin/users/{id}/devices/{device}", authService.Middleware(authService.AdminUnbind))
+	mux.Handle("GET /api/v1/admin/invites", authService.Middleware(authService.AdminInvites))
+	mux.Handle("POST /api/v1/admin/invites", authService.Middleware(authService.AdminCreateInvite))
+	mux.Handle("PATCH /api/v1/admin/invites/{id}/status", authService.Middleware(authService.AdminInviteStatus))
+	mux.Handle("GET /api/v1/admin/registrations", authService.Middleware(authService.AdminRegistrations))
+	mux.Handle("POST /api/v1/admin/registrations/{id}/approve", authService.Middleware(authService.AdminApproveRegistration))
+	mux.Handle("POST /api/v1/admin/registrations/{id}/reject", authService.Middleware(authService.AdminRejectRegistration))
 	mux.Handle("POST /api/v1/auth/logout", authService.Middleware(authService.Logout))
 	mux.Handle("GET /api/v1/devices", authService.Middleware(authService.Devices))
 	mux.Handle("DELETE /api/v1/devices/{id}", authService.Middleware(authService.Revoke))
@@ -178,7 +184,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/workspaces/{id}/events", authService.Middleware(workspaceService.Feed))
 	mux.Handle("POST /api/v1/workspace-comments", authService.Middleware(workspaceService.CreateComment))
 	mux.Handle("GET /api/v1/workspace-comments", authService.Middleware(workspaceService.ListComments))
-	mux.Handle("GET /api/v1/change-hints", authService.Middleware(hub.Stream))
+	mux.Handle("GET /api/v1/change-hints", wsBearer(authService.Middleware(hub.Stream)))
 
 	mux.Handle("GET /api/v1/promotion-sources", authService.Middleware(promotionService.ListSources))
 	mux.Handle("POST /api/v1/promotion-sources", authService.Middleware(promotionService.CreateSource))
@@ -216,6 +222,21 @@ func (s *Server) adminTelemetry(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	httpx.WriteJSON(w, 200, report)
+}
+
+// wsBearer sits outside the auth middleware and lets WebSocket clients present
+// the access token via the access_token query parameter: browsers cannot set
+// custom headers on WebSocket connections. Applied only to the change-hints
+// stream.
+func wsBearer(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") == "" {
+			if token := r.URL.Query().Get("access_token"); token != "" {
+				r.Header.Set("Authorization", "Bearer "+token)
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // adminOperations serves self-host operations data (R3/INH-543 groundwork).

@@ -227,7 +227,7 @@ func (s *Service) AdminDevices(w http.ResponseWriter, r *http.Request) {
 	if !adminOnly(w, r) {
 		return
 	}
-	rows, e := s.DB.QueryContext(r.Context(), `SELECT id,name,kind,created_at,revoked_at FROM devices WHERE user_id=$1 ORDER BY created_at DESC`, r.PathValue("id"))
+	rows, e := s.DB.QueryContext(r.Context(), `SELECT id,name,kind,created_at,revoked_at FROM devices WHERE user_id=$1 AND revoked_at IS NULL AND kind IN ('desktop','mobile') ORDER BY kind`, r.PathValue("id"))
 	if e != nil {
 		httpx.Error(w, 503, "unavailable", "读取失败")
 		return

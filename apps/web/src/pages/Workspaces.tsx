@@ -17,6 +17,11 @@ export default function Workspaces(){
  const reload=()=>{void request<{workspaces:Workspace[]}>("/api/v1/workspaces").then(x=>setWorkspaces(x.workspaces)).catch(e=>setError(String(e)));
   void request<{invites:MyInvite[]}>("/api/v1/invites/mine").then(x=>setMyInvites(x.invites)).catch(()=>{});};
  useEffect(reload,[]);
+ useEffect(()=>{
+  const onHint=(e:Event)=>{const ev=(e as CustomEvent<{type?:string}>).detail;if(ev?.type==="comment"||ev?.type==="member_removed")reload();};
+  window.addEventListener("aihub-change-hint",onHint);
+  return()=>window.removeEventListener("aihub-change-hint",onHint);
+ },[]);
 
  async function openWorkspace(id:string){
   setSelected(id);setError("");
