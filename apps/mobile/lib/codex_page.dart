@@ -582,7 +582,7 @@ class _CodexPageState extends State<CodexPage>
         items: const [
           DropdownMenuItem(value: 'unknown', child: Text('未知')),
           DropdownMenuItem(value: 'plus', child: Text('Plus · 显示五小时额度')),
-          DropdownMenuItem(value: 'pro', child: Text('Pro · 隐藏五小时额度及提醒')),
+          DropdownMenuItem(value: 'pro', child: Text('Pro · 显示五小时额度（上限更高）')),
         ],
         onChanged: (value) async {
           if (value == null) return;
