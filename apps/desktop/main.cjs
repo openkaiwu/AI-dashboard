@@ -2,6 +2,7 @@ const {app,BrowserWindow,Tray,Menu,nativeImage,ipcMain,dialog,shell}=require('el
 const fs=require('node:fs');
 const path=require('node:path');
 const runtime=require('./runtime.cjs');
+const platform=require('./platform.cjs');
 if(typeof process!=='undefined'&&process.env.AIHUB_PREVIEW_USER_DATA){
  const previewDir=path.resolve(process.env.AIHUB_PREVIEW_USER_DATA);
  fs.mkdirSync(previewDir,{recursive:true});
@@ -15,16 +16,22 @@ else {
  app.on('second-instance',()=>{win?.show();win?.focus();});
  app.on('before-quit',()=>{quitting=true;runtime.stopManaged();});
  app.whenReady().then(async()=>{
-  app.setAppUserModelId('local.aihub.codex');
+  if(platform.appUserModelIdSupported())app.setAppUserModelId('local.aihub.codex');
+  if(platform.loginItemSupported())app.setLoginItemSettings({openAtLogin:true,args:['--startup']});
   win=new BrowserWindow({width:1220,height:860,minWidth:420,minHeight:600,title:'AI Hub · Codex 使用助手',backgroundColor:'#ffffff',show:false,webPreferences:{preload:path.join(__dirname,'preload.cjs'),nodeIntegration:false,contextIsolation:true,sandbox:true,backgroundThrottling:false}});
   win.removeMenu();
   win.webContents.on('before-input-event',(event,input)=>{if(input.control&&input.shift&&input.key.toLowerCase()==='t'&&input.type==='keyDown'){event.preventDefault();void showAlert({title:'强提醒测试',body:'这是演示，不会改变真实额度或提醒状态。'});}});
-  win.on('close',e=>{if(!quitting){e.preventDefault();win.hide();}});
+  win.on('close',e=>{if(!quitting&&trayReady){e.preventDefault();win.hide();}});
   win.webContents.setWindowOpenHandler(({url})=>{if(/^https:\/\/(x\.com|developers\.openai\.com|learn\.chatgpt\.com)\//.test(url))void shell.openExternal(url);return {action:'deny'};});
   win.webContents.on('will-navigate',(e,url)=>{if(!allowOrigin(url))e.preventDefault();});
   win.webContents.session.setPermissionRequestHandler((_wc,_permission,callback)=>callback(false));
   const icon=nativeImage.createFromPath(path.join(__dirname,'icon.png'));win.setIcon(icon);
-  tray=new Tray(icon);tray.setToolTip('AI Hub · 额度强提醒');
+  let trayReady=true;
+  try{
+   tray=new Tray(icon);tray.setToolTip('AI Hub · 额度强提醒');
+   buildTrayMenu();
+   tray.on('double-click',()=>{win.show();win.focus();});
+  }catch{trayReady=false;}
   function buildTrayMenu(){
    tray.setContextMenu(Menu.buildFromTemplate([
     {label:'打开 AI Hub',click:()=>{win.show();win.focus();}},
@@ -34,8 +41,6 @@ else {
     {label:'退出',click:()=>app.quit()},
    ]));
   }
-  buildTrayMenu();
-  tray.on('double-click',()=>{win.show();win.focus();});
   ipcMain.handle('quota-alert',async(e,value)=>{
    if(e.sender!==win.webContents||e.senderFrame!==win.webContents.mainFrame||!allowOrigin(e.senderFrame.url))throw Error('Unauthorized sender');
    return showAlert(value);
@@ -65,7 +70,7 @@ else {
    const pref=runtime.readModePreference();
    if(!force&&pref?.remember&&pref.mode){runtime.setUserMode(pref.mode);return pref.mode;}
    win.show();win.focus();
-   const pick=await dialog.showMessageBox(win,{type:'question',title:'AI Hub · 选择使用方式',message:'你想如何开始使用？',detail:'【登录服务器】输入管理员提供的 HTTPS 地址。\n\n【本地开发】仅在本机运行（127.0.0.1），需要 WSL、PostgreSQL 和管理员初始化。',buttons:['登录服务器','本地开发模式'],defaultId:0,cancelId:0,noLink:true});
+   const pick=await dialog.showMessageBox(win,{type:'question',title:'AI Hub · 选择使用方式',message:'你想如何开始使用？',detail:`【登录服务器】输入管理员提供的 HTTPS 地址。\n\n【本地开发】仅在本机运行（127.0.0.1），${platform.askModeLocalHint()}`,buttons:['登录服务器','本地开发模式'],defaultId:0,cancelId:0,noLink:true});
    const mode=pick.response===0?'cloud':'local';
    const remember=await dialog.showMessageBox(win,{type:'question',title:'记住选择？',message:'下次启动是否直接使用该模式？',buttons:['记住','每次询问'],defaultId:0,cancelId:1,noLink:true});
    fs.writeFileSync(path.join(runtime.dataDir(),'mode-preference.json'),JSON.stringify({mode,remember:remember.response===0},null,2));
@@ -77,7 +82,7 @@ else {
    const origin=uiOrigin();
    await win.loadURL(origin+'/');
    await runtime.syncBridgeFromSession(win.webContents,config);
-   win.show();
+   if(!(typeof process!=='undefined'&&process.argv.includes('--startup')))win.show();
   }
   async function handleCloudFailure(err){
    const hint=runtime.startupMessage()||err?.message||String(err||'连接失败');
@@ -105,7 +110,7 @@ else {
     await openApp();
    }catch(err){
     if(runtime.getActiveMode()==='cloud')return handleCloudFailure(err);
-    await dialog.showMessageBox(win,{type:'error',title:'离线模式启动失败',message:runtime.startupMessage()||err.message||String(err),detail:'请确认已安装 WSL 与 PostgreSQL 14。'});
+    await dialog.showMessageBox(win,{type:'error',title:'离线模式启动失败',message:runtime.startupMessage()||err.message||String(err),detail:platform.localModeHelp()});
     win.show();
    }
   }

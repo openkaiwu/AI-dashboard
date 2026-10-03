@@ -1,11 +1,10 @@
 const {app,safeStorage}=require('electron');
-const {spawn,execFile}=require('node:child_process');
+const {spawn}=require('node:child_process');
 const crypto=require('node:crypto');
 const fs=require('node:fs');
 const https=require('node:https');
 const path=require('node:path');
-const {promisify}=require('node:util');
-const execFileAsync=promisify(execFile);
+const platform=require('./platform.cjs');
 
 const LOCAL_ORIGIN='http://127.0.0.1:8080';
 const DEFAULT_CLOUD='https://hub.example.com';
@@ -23,10 +22,10 @@ function writeSecret(name,value){if(!safeStorage.isEncryptionAvailable())throw E
 function extensionPairCode(){let code=readSecret('extension-pair');if(!code){code=crypto.randomBytes(24).toString('hex');writeSecret('extension-pair',code)}return code;}
 function readDesktopSession(profileId){const all=readSecret('sessions');try{return JSON.parse(all||'{}')[profileId]||null;}catch{return null;}}
 function writeDesktopSession(profileId,session){let all={};try{all=JSON.parse(readSecret('sessions')||'{}');}catch{}if(session)all[profileId]=session;else delete all[profileId];writeSecret('sessions',JSON.stringify(all));}
-const DEV_BIN={'aihub-server.exe':'aihub-windows-amd64.exe','aihub-bridge.exe':'aihub-bridge-windows-amd64.exe'};
-function binPath(name){
- if(!app.isPackaged){return path.join(__dirname,'..','..','artifacts','aihub-m0',DEV_BIN[name]||name);}
- return path.join(process.resourcesPath,'bin',name);
+function binPath(kind){
+ const names=platform.binNames();
+ if(!app.isPackaged){return path.join(__dirname,'..','..','artifacts','aihub-m0',kind==='bridge'?names.bridgeDev:names.serverDev);}
+ return path.join(process.resourcesPath,'bin',kind==='bridge'?names.bridgePackaged:names.serverPackaged);
 }
 function bundledConfig(){
  const file=app.isPackaged?path.join(process.resourcesPath,'app-config.json'):path.join(__dirname,'resources','app-config.json');
@@ -71,41 +70,6 @@ function forceLocalMode(){
  const dir=ensureDataDir();
  const prev=readJson(path.join(dir,'app-config.json'))||{};
  fs.writeFileSync(path.join(dir,'app-config.json'),JSON.stringify({...prev,uiMode:'local',cloudFallback:true},null,2));
-}
-function readEnvFile(file){
- const line=fs.readFileSync(file,'utf8').split(/\r?\n/).find(l=>l.startsWith('export AIHUB_DATABASE_URL='));
- if(!line)throw new Error('server.env 缺少数据库配置');
- return line.slice('export AIHUB_DATABASE_URL='.length).trim().replace(/^"|"$/g,'');
-}
-async function execWsl(script){
- await execFileAsync('wsl.exe',['-e','bash','-lc',script],{windowsHide:true});
-}
-async function ensureWsl(){
- try{await execFileAsync('wsl.exe',['-e','true'],{windowsHide:true});return true;}catch{throw new Error('未检测到 WSL，请先安装 WSL 与 PostgreSQL');}
-}
-async function ensurePostgres(dir){
- await ensureWsl();
- const keepFile=path.join(dir,'wsl-keepalive.json');
- let alive=false;
- if(fs.existsSync(keepFile)){
-  try{const saved=JSON.parse(fs.readFileSync(keepFile,'utf8'));process.kill(saved.Id,0);alive=true;}catch{}
- }
- if(!alive){
-  const keep=spawn('wsl.exe',['-e','sleep','infinity'],{stdio:'ignore',windowsHide:true,detached:true});
-  keep.unref();
-  fs.writeFileSync(keepFile,JSON.stringify({Id:keep.pid,StartTicks:String(keep.spawnfile||'')}));
- }
- await execWsl('for v in 14 16 15 13; do pg_ctlcluster "$v" main status >/dev/null 2>&1 && { pg_ctlcluster "$v" main start; exit 0; }; done; pg_ctlcluster 14 main start');
-}
-async function ensureServerEnv(dir){
- const envFile=path.join(dir,'server.env');
- if(fs.existsSync(envFile))return readEnvFile(envFile);
- const password=crypto.randomBytes(24).toString('hex');
- const sql=`DO \\$\\$ BEGIN CREATE ROLE aihub_m0 LOGIN PASSWORD '${password}'; EXCEPTION WHEN duplicate_object THEN NULL; END \\$\\$; DO \\$\\$ BEGIN CREATE DATABASE aihub_m0 OWNER aihub_m0; EXCEPTION WHEN duplicate_database THEN NULL; END \\$\\$;`;
- await execWsl(`(command -v runuser >/dev/null && runuser -u postgres -- psql -v ON_ERROR_STOP=1 -c "${sql}") || sudo -u postgres psql -v ON_ERROR_STOP=1 -c "${sql}"`);
- const url=`postgres://aihub_m0:${password}@127.0.0.1:5432/aihub_m0?sslmode=disable`;
- fs.writeFileSync(envFile,`export AIHUB_DATABASE_URL="${url}"\n`,{mode:0o600});
- return url;
 }
 function httpsJson(method,urlStr,body,headers={}){
  return new Promise((resolve,reject)=>{
@@ -166,9 +130,9 @@ function spawnHidden(exe,args,logBase,extraEnv={}){
 }
 async function ensureServer(dir){
  if(await waitReady(LOCAL_ORIGIN,1500))return;
- const serverExe=binPath('aihub-server.exe');
+ const serverExe=binPath('server');
  if(!fs.existsSync(serverExe))throw new Error('缺少内置服务端程序');
- const dbUrl=await ensureServerEnv(dir);
+ const dbUrl=await platform.ensureDatabase(dir);
  const pidFile=path.join(dir,'server.pid');
  if(fs.existsSync(pidFile)){
   try{process.kill(Number(fs.readFileSync(pidFile,'utf8').trim()),0);if(await waitReady(LOCAL_ORIGIN,3000))return;}catch{}
@@ -177,23 +141,7 @@ async function ensureServer(dir){
  fs.writeFileSync(pidFile,String(child.pid));
  managed.server=child;
  child.on('exit',()=>{if(managed.server===child)managed.server=null;});
- if(!await waitReady(LOCAL_ORIGIN,45000))throw new Error('本地服务启动超时，请确认 WSL 已安装且 PostgreSQL 可用');
-}
-function findCodexExe(){
- const roots=[path.join(process.env.LOCALAPPDATA||'','OpenAI','Codex','bin')];
- for(const root of roots){
-  if(!fs.existsSync(root))continue;
-  const stack=[root];
-  while(stack.length){
-   const dir=stack.pop();
-   for(const entry of fs.readdirSync(dir,{withFileTypes:true})){
-    const full=path.join(dir,entry.name);
-    if(entry.isDirectory())stack.push(full);
-    else if(entry.name==='codex.exe')return full;
-   }
-  }
- }
- return '';
+ if(!await waitReady(LOCAL_ORIGIN,45000))throw new Error(platform.serverStartupHint(dir)||'本地服务启动超时，请确认数据库已就绪');
 }
 function bridgeReady(cfg){return cfg&&cfg.server&&cfg.device_id&&readSecret('bridge-token');}
 async function apiJson(url,options={}){
@@ -230,13 +178,14 @@ async function ensureBridge(dir,config){
  ensureBridgeConfig(dir,config);
  const cfgPath=path.join(dir,'bridge.json');
  let cfg=readJson(cfgPath);
+ if(cfg&&cfg.cursor_enabled!==true){cfg.cursor_enabled=true;fs.writeFileSync(cfgPath,JSON.stringify(cfg,null,2),{mode:0o600});}
  if(!bridgeReady(cfg))return;
  if(!cfg.codex_path||!fs.existsSync(cfg.codex_path)){
-  const found=findCodexExe();
+  const found=await platform.findCodex();
   cfg.codex_path=found||'';
   fs.writeFileSync(cfgPath,JSON.stringify(cfg,null,2),{mode:0o600});
  }
- const bridgeExe=binPath('aihub-bridge.exe');
+ const bridgeExe=binPath('bridge');
  if(!fs.existsSync(bridgeExe))return;
  const stateFile=path.join(dir,'bridge-process.json');
  if(fs.existsSync(stateFile)){
@@ -273,7 +222,7 @@ async function syncBridgeFromSession(webContents,config){
  stopBridge();
  try{
   const token=await createBridgeToken(picked.server,session.token,'我的电脑');
-  writeBridge(dir,{server:picked.server,device_id:session.device_id,codex_path:findCodexExe()||'',cursor_enabled:true,interval_seconds:config.bridgeIntervalSeconds||300},token);
+  writeBridge(dir,{server:picked.server,device_id:session.device_id,codex_path:await platform.findCodex()||'',cursor_enabled:true,interval_seconds:config.bridgeIntervalSeconds||300},token);
   await ensureBridge(dir,config);
  }catch(e){lastError=`采集器连接失败：${e.message}`;}
 }
@@ -282,7 +231,7 @@ function stopBridge(){
  managed.bridge=null;
  const stateFile=path.join(ensureDataDir(),'bridge-process.json');
  const saved=readJson(stateFile);
- if(saved?.Binary===binPath('aihub-bridge.exe')&&Number.isInteger(saved.Id)){try{process.kill(saved.Id);}catch{}}
+ if(saved?.Binary===binPath('bridge')&&Number.isInteger(saved.Id)){try{process.kill(saved.Id);}catch{}}
  try{fs.unlinkSync(stateFile);}catch{}
 }
 function stopManaged(){

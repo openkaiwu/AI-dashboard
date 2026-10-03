@@ -47,7 +47,8 @@ grep_fail "no committed private keys" "BEGIN (RSA |EC )?PRIVATE KEY" server apps
 grep_fail "no password literals in Go sources" "(password|passwd)\s*=\s*\"[^\"]{6,}\"" server --include='*.go'
 
 # 2. Auth surface
-grep_must "public registration closed" "registration_closed" server/internal/auth/auth.go
+grep_must "invite registration creates pending accounts" "member','pending'" server/internal/auth/invite.go
+grep_must "pending accounts blocked at login" "account_pending" server/internal/auth/auth.go
 grep_must "bridge uploads verify active desktop device" "EnsureActiveDesktopDevice" server/internal/connector
 grep_must "access tokens stored hashed" "access_hash" server/internal/auth/auth.go
 grep_fail "no plaintext token columns" "access_token TEXT|token TEXT NOT NULL" server/migrations --include='*.sql'

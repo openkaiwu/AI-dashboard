@@ -1,6 +1,6 @@
 {
   "name": "aihub-desktop",
-  "version": "0.3.3",
+  "version": "1.0.0",
   "description": "AI Hub Codex quota companion",
   "author": "AI Hub",
   "license": "MIT",
@@ -48,6 +48,47 @@
         }
       ],
       "icon": "icon.ico"
+    },
+    "linux": {
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": ["x64"]
+        },
+        {
+          "target": "deb",
+          "arch": ["x64"]
+        }
+      ],
+      "icon": "icon.png",
+      "category": "Utility",
+      "artifactName": "AIHub-${version}-${arch}.${ext}"
+    },
+    "appImage": {
+      "artifactName": "AIHub-${version}-x86_64.AppImage"
+    },
+    "deb": {
+      "artifactName": "AIHub-${version}-amd64.deb",
+      "category": "Utility"
+    },
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": ["arm64"]
+        },
+        {
+          "target": "zip",
+          "arch": ["arm64"]
+        }
+      ],
+      "icon": "icon.icns",
+      "category": "public.app-category.utilities",
+      "identity": null,
+      "artifactName": "AIHub-${version}-${arch}.${ext}"
+    },
+    "dmg": {
+      "artifactName": "AIHub-${version}-arm64.dmg"
     },
     "nsis": {
       "oneClick": false,

@@ -5,16 +5,33 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>AI Hub 下载</title>
   <style>
-    body { font-family: system-ui, sans-serif; max-width: 640px; margin: 40px auto; padding: 0 16px; line-height: 1.6; }
+    body { font-family: system-ui, sans-serif; max-width: 720px; margin: 40px auto; padding: 0 16px; line-height: 1.6; }
+    h2 { margin-top: 32px; border-bottom: 1px solid #ddd; padding-bottom: 6px; }
     a.btn { display: block; margin: 12px 0; padding: 14px 18px; background: #10120e; color: #c6f25e; text-decoration: none; border-radius: 10px; text-align: center; }
+    a.btn small { display: block; color: #9fb26a; font-weight: normal; margin-top: 4px; }
     .muted { color: #666; font-size: 14px; }
+    code { background: #f4f4f0; padding: 1px 5px; border-radius: 4px; }
   </style>
 </head>
 <body>
-  <h1>AI Hub 手机 App</h1>
-  <p class="muted">任选一种方式下载（约 58 MB）</p>
-  <a class="btn" href="/downloads/aihub-mobile.apk">直接下载 APK（80 端口）</a>
-  <a class="btn" href="http://203.0.113.10:8888/downloads/aihub-mobile.apk">备用下载（8888 端口）</a>
+  <h1>AI Hub 下载</h1>
+  <p class="muted">移动端与桌面端客户端 · v1.0.0 · 2026-10-03</p>
+
+  <h2>📱 移动端</h2>
+  <a class="btn" href="/downloads/aihub-mobile.apk">Android APK 直接下载<small>约 58 MB · Android 7.0+ · SHA256 见 aihub-mobile.apk.sha256</small></a>
+  <a class="btn" href="http://hub.example.com:8888/downloads/aihub-mobile.apk">Android APK 备用下载（8888 端口）<small>80 端口不可用时使用，手机 4G/5G 访问</small></a>
+  <p class="muted">iOS 版（未签名 ipa，需自行重签侧载）将在 CI 出包后提供：见 <code>docs/IOS_BUILD_AND_SIDELOAD_ZH.md</code>。</p>
+
+  <h2>💻 桌面端</h2>
+  <a class="btn" href="/downloads/desktop/AIHub-Setup-1.0.0.exe">Windows 安装包（NSIS）<small>AIHub-Setup-1.0.0.exe · 含内置服务端 · Windows 10+ x64</small></a>
+  <a class="btn" href="/downloads/desktop/aihub-desktop-windows-x64.zip">Windows 便携版（免安装 zip）<small>解压即用 · AIHub.exe · 含内置服务端</small></a>
+  <p class="muted">Linux（AppImage/deb）与 macOS（dmg）由 GitHub Actions <code>Release Packages</code> 工作流出包后补充上架。</p>
+  <p class="muted">桌面端支持两种模式：<strong>登录服务器</strong>（填写本服务器地址）或<strong>本地开发</strong>（需要 PostgreSQL）。</p>
+
+  <h2>校验</h2>
+  <p class="muted">各文件 SHA256：<a href="/downloads/desktop/SHA256SUMS.txt">desktop/SHA256SUMS.txt</a> · <a href="/downloads/aihub-mobile.apk.sha256">aihub-mobile.apk.sha256</a><br>
+  下载后建议核对：<code>certutil -hashfile 文件名 SHA256</code>（Windows）/ <code>shasum -a 256 文件名</code>（macOS/Linux）</p>
+
   <p class="muted">若浏览器无法打开，请用手机 <strong>4G/5G</strong> 访问，或在电脑运行：<code>scripts/Download-Apk.ps1</code>（SSH 下载，不依赖 80/443）。</p>
 </body>
 </html>

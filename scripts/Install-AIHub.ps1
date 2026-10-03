@@ -20,7 +20,9 @@ New-Item -ItemType Directory -Force -Path $runtimeDir | Out-Null
 $devRuntime = Join-Path $Root '.runtime'
 foreach ($name in @('bridge.json', 'bootstrap.json', 'server.env', 'app-config.json')) {
     $src = Join-Path $devRuntime $name
-    if (Test-Path -LiteralPath $src) {
+    # Skip empty dev files: overwriting a configured installed app with an
+    # empty app-config.json would reset cloudServer to the default.
+    if ((Test-Path -LiteralPath $src) -and ((Get-Item -LiteralPath $src).Length -gt 0)) {
         Copy-Item -LiteralPath $src -Destination (Join-Path $runtimeDir $name) -Force
     }
 }
@@ -45,6 +47,7 @@ if (!(Test-Path -LiteralPath $exe)) {
 }
 if (!(Test-Path -LiteralPath $exe)) { throw "AI Hub.exe not found after install" }
 
+Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name 'AI Hub' -Value ('"{0}" --startup' -f $exe)
 Write-Host "Launching $exe"
 Start-Process -FilePath $exe
 Write-Host 'Done. On first launch choose 登录服务器 or 离线本地模式; tray menu can switch later.'

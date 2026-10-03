@@ -1,0 +1,121 @@
+name: Release Packages
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+jobs:
+  linux:
+    name: Linux packages (x64)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Build web bundle
+        run: |
+          npm ci --prefix apps/web
+          npm run build --prefix apps/web
+          mkdir -p server/webassets/dist
+          cp -R apps/web/dist/. server/webassets/dist/
+      - name: Cross-build server binaries
+        run: |
+          cd server
+          GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o ../artifacts/aihub-m0/aihub-linux-amd64 ./cmd/aihub
+          GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o ../artifacts/aihub-m0/aihub-bridge-linux-amd64 ./cmd/aihub-bridge
+          GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o ../artifacts/aihub-m0/aihub-admin-linux-amd64 ./cmd/aihub-admin
+      - name: Stage embedded desktop binaries
+        run: bash scripts/stage-desktop-binaries.sh linux amd64
+      - name: Package desktop (AppImage + deb)
+        run: |
+          cd apps/desktop
+          npm ci
+          npx electron-builder --linux --publish never
+      - name: Collect artifacts and checksums
+        run: |
+          mkdir -p artifacts/release/linux
+          cp artifacts/desktop/installer/AIHub-*.AppImage artifacts/desktop/installer/AIHub-*.deb artifacts/release/linux/ 2>/dev/null || true
+          cp artifacts/aihub-m0/aihub-linux-amd64 artifacts/aihub-m0/aihub-bridge-linux-amd64 artifacts/aihub-m0/aihub-admin-linux-amd64 artifacts/release/linux/
+          (cd artifacts/release/linux && sha256sum * > SHA256SUMS-linux.txt)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aihub-linux-x64
+          path: artifacts/release/linux
+
+  macos:
+    name: macOS packages (arm64, unsigned)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Build web bundle
+        run: |
+          npm ci --prefix apps/web
+          npm run build --prefix apps/web
+          mkdir -p server/webassets/dist
+          cp -R apps/web/dist/. server/webassets/dist/
+      - name: Build server binaries (darwin arm64)
+        run: |
+          cd server
+          GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o ../artifacts/aihub-m0/aihub-darwin-arm64 ./cmd/aihub
+          GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o ../artifacts/aihub-m0/aihub-bridge-darwin-arm64 ./cmd/aihub-bridge
+      - name: Stage embedded desktop binaries
+        run: bash scripts/stage-desktop-binaries.sh darwin arm64
+      - name: Package desktop (dmg + zip, unsigned)
+        run: |
+          cd apps/desktop
+          npm ci
+          npx electron-builder --mac --publish never
+      - name: Collect artifacts and checksums
+        run: |
+          mkdir -p artifacts/release/darwin
+          cp artifacts/desktop/installer/AIHub-*.dmg artifacts/desktop/installer/AIHub-*.zip artifacts/release/darwin/ 2>/dev/null || true
+          cp artifacts/aihub-m0/aihub-darwin-arm64 artifacts/aihub-m0/aihub-bridge-darwin-arm64 artifacts/release/darwin/
+          (cd artifacts/release/darwin && shasum -a 256 * > SHA256SUMS-darwin.txt)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aihub-darwin-arm64
+          path: artifacts/release/darwin
+
+  ios:
+    name: iOS unsigned ipa (sideload)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.47.5'
+          channel: stable
+      - name: Analyze and unit-test Dart
+        working-directory: apps/mobile
+        run: |
+          flutter pub get
+          flutter analyze
+          # real_server_test.dart needs the gate server + PostgreSQL; the
+          # ubuntu gate covers it, so only unit/widget tests run here.
+          flutter test test/auth_test.dart test/parity_test.dart test/sync_test.dart test/strong_reminder_test.dart test/widget_test.dart
+      - name: Build unsigned iOS app (device arm64)
+        working-directory: apps/mobile
+        run: flutter build ios --release --no-codesign
+      - name: Package sideload ipa
+        run: |
+          VER=$(grep '^version:' apps/mobile/pubspec.yaml | awk '{print $2}' | cut -d+ -f1)
+          mkdir -p artifacts/release/ios/Payload
+          cp -R apps/mobile/build/ios/iphoneos/Runner.app "artifacts/release/ios/Payload/AIHub.app"
+          cd artifacts/release/ios
+          zip -qry "AIHub-${VER}-unsigned.ipa" Payload
+          rm -rf Payload
+          shasum -a 256 *.ipa > SHA256SUMS-ios.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aihub-ios-unsigned
+          path: artifacts/release/ios
