@@ -28,12 +28,12 @@ type Snapshot struct {
 	News         *News         `json:"news,omitempty"`
 }
 
-// ForPlan leaves the captured snapshot intact for identified Plus and Pro
-// subscriptions, both of which carry actionable five-hour windows (Pro with a
-// higher allowance). Unknown plans stay conservative and hide five-hour
+// ForPlan leaves the captured snapshot intact for identified subscriptions
+// (Plus, Pro and Pro Lite) and keeps whatever windows Codex itself reported
+// for that account. Unknown plans stay conservative and hide five-hour
 // windows until the subscription has been confirmed.
 func (s Snapshot) ForPlan(plan string) Snapshot {
-	if plan == "plus" || plan == "pro" {
+	if plan == "plus" || plan == "pro" || plan == "prolite" {
 		return s
 	}
 	out := s

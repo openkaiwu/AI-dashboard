@@ -11,7 +11,7 @@ func TestForPlanKeepsFiveHourWindowsForIdentifiedPlans(t *testing.T) {
 		Primary:   &Window{UsedPercent: 40, DurationMinutes: 300},
 		Secondary: &Window{UsedPercent: 10, DurationMinutes: 10080},
 	}}}
-	for _, plan := range []string{"plus", "pro"} {
+	for _, plan := range []string{"plus", "pro", "prolite"} {
 		got := s.ForPlan(plan)
 		if len(got.Buckets) != 1 || got.Buckets[0].Primary == nil || got.Buckets[0].Primary.DurationMinutes != 300 {
 			t.Fatalf("plan %s: five-hour window must be preserved, got %+v", plan, got.Buckets)

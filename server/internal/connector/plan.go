@@ -35,8 +35,8 @@ func (s *Service) Plan(w http.ResponseWriter, r *http.Request) {
 	var q struct {
 		Plan string `json:"plan_type"`
 	}
-	if httpx.Decode(r, &q) != nil || (q.Plan != "plus" && q.Plan != "pro" && q.Plan != "unknown") {
-		httpx.Error(w, 400, "invalid_plan", "请选择 Plus、Pro 或未知")
+	if httpx.Decode(r, &q) != nil || (q.Plan != "plus" && q.Plan != "pro" && q.Plan != "prolite" && q.Plan != "unknown") {
+		httpx.Error(w, 400, "invalid_plan", "请选择 Plus、Pro、Pro Lite 或未知")
 		return
 	}
 	_, e := s.DB.ExecContext(r.Context(), `INSERT INTO codex_plan(user_id,plan_type,source_type) VALUES($1,$2,'manual') ON CONFLICT(user_id) DO UPDATE SET plan_type=excluded.plan_type,source_type='manual',updated_at=now()`, uid, q.Plan)
