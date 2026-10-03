@@ -28,3 +28,5 @@ bridge/bridge-process.json
 
 backups/
 .m0-staging/
+
+AIDASH-backup-*/
