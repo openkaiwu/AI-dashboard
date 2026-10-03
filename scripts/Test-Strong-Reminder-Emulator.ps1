@@ -1,6 +1,6 @@
 param(
     [string]$SshKey = 'C:\Users\<you>\.ssh\server-key.pem',
-    [string]$SshHost = 'ubuntu@hub.example.com',
+    [string]$SshHost = 'ubuntu@203.0.113.10',
     [string]$Email = 'owner@example.com',
     [string]$SdkRoot = 'D:\wearing\.android-sdk',
     [ValidateSet('foreground', 'background')]

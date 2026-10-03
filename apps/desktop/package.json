@@ -3,7 +3,10 @@
   "version": "1.0.0",
   "description": "AI Hub Codex quota companion",
   "homepage": "https://hub.example.com",
-  "author": "AI Hub",
+  "author": {
+    "name": "AI Hub",
+    "email": "37280498+orangevv@users.noreply.github.com"
+  },
   "license": "MIT",
   "main": "main.cjs",
   "scripts": {
