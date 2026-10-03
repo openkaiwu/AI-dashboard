@@ -17,10 +17,11 @@ import 'cursor_page.dart';
 import 'inbox_page.dart';
 import 'theme.dart';
 import 'manual_account.dart';
+import 'strong_reminder_ui.dart';
 
 void main() {
-  unawaited(LocalNotifications.init());
   WidgetsFlutterBinding.ensureInitialized();
+  unawaited(LocalNotifications.init());
   runApp(const HubApp());
 }
 
@@ -53,19 +54,25 @@ class _HubHomeState extends State<HubHome> with WidgetsBindingObserver {
   Map<String, String> modeStatus = {};
   final vault = const FlutterSecureStorage();
   Timer? timer;
+  bool reminderPopupOpen = false;
   String? error;
   bool busy = false;
+  bool registerMode = false;
+  bool registerDone = false;
   int tab = 0;
   String uiMode = 'choose';
   int manualRevision = 0;
   final email = TextEditingController(),
       password = TextEditingController(),
-      deviceName = TextEditingController(text: '我的手机');
+      deviceName = TextEditingController(text: '我的手机'),
+      inviteCode = TextEditingController(),
+      regNote = TextEditingController();
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    LocalNotifications.onAction = handleReminderAction;
     unawaited(initialize());
     timer = Timer.periodic(const Duration(seconds: 30), (_) {
       if (engine != null && !busy) {
@@ -82,6 +89,8 @@ class _HubHomeState extends State<HubHome> with WidgetsBindingObserver {
     email.dispose();
     password.dispose();
     deviceName.dispose();
+    inviteCode.dispose();
+    regNote.dispose();
     api?.client.close();
     unawaited(store?.close());
     super.dispose();
@@ -91,6 +100,7 @@ class _HubHomeState extends State<HubHome> with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState value) {
     if (value == AppLifecycleState.resumed && engine != null && !busy) {
       unawaited(sync());
+      unawaited(pollStrongNotifications());
     }
   }
 
@@ -218,8 +228,28 @@ class _HubHomeState extends State<HubHome> with WidgetsBindingObserver {
     if (mounted && api == current) setState(() => modeStatus = next);
   }
 
+  Future<void> handleReminderAction(String id, String action) async {
+    if (action == 'open') {
+      await pollStrongNotifications();
+      return;
+    }
+    if (action != 'read' && action != 'snooze' && action != 'dismiss') return;
+    try {
+      await api?.call(
+          'POST',
+          '/api/v1/notifications/${Uri.encodeComponent(id)}/action',
+          {'action': action});
+      final scope = api?.session == null
+          ? null
+          : '${selected?['url']}|${api!.session!['user']['id']}|${api!.session!['device_id']}';
+      if (scope != null && action != 'snooze') {
+        await vault.write(key: 'strong-seen:$scope:$id', value: id);
+      }
+    } catch (_) {}
+  }
+
   Future<void> pollStrongNotifications() async {
-    if (api?.session == null || !mounted) return;
+    if (api?.session == null || !mounted || reminderPopupOpen) return;
     try {
       final data = await api!.call('GET', '/api/v1/notifications');
       final items = List<Json>.from(data['notifications'] as List? ?? []);
@@ -236,47 +266,38 @@ class _HubHomeState extends State<HubHome> with WidgetsBindingObserver {
           '${selected!['url']}|${api!.session!['user']['id']}|${api!.session!['device_id']}';
       final seenKey = 'strong-seen:$scope:$id';
       if (await vault.read(key: seenKey) != null) return;
-      await LocalNotifications.showReminder(
-        id: '$scope:$id',
-        title: next['title'] as String? ?? 'AI Hub 提醒',
-        body: next['body'] as String? ?? '',
-      );
+      final foreground =
+          WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed;
+      if (!foreground) {
+        final postedKey = 'strong-posted:$scope:$id';
+        if (await vault.read(key: postedKey) != null) return;
+        await LocalNotifications.showReminder(
+          id: id,
+          title: StrongReminderCopy.notificationTitle(next),
+          body: StrongReminderCopy.notificationBody(next),
+        );
+        await vault.write(key: postedKey, value: id);
+        return;
+      }
       final slug = next['provider_slug'] as String?;
       if (slug == 'cursor' || slug == 'codex') await switchUiMode(slug!);
       if (!mounted) return;
-      final provider = next['provider_name'] as String? ?? 'AI Hub';
+      reminderPopupOpen = true;
       final action = await showDialog<String>(
         context: context,
         barrierDismissible: false,
-        builder: (ctx) => AlertDialog(
-          title: Text('$provider · ${next['title']}'),
-          content: Text(next['body'] as String? ?? ''),
-          actions: [
-            TextButton(
-                onPressed: () => Navigator.pop(ctx, 'read'),
-                child: const Text('已读')),
-            TextButton(
-                onPressed: () => Navigator.pop(ctx, 'later'),
-                child: const Text('稍后')),
-          ],
-        ),
+        builder: (ctx) => StrongReminderDialog(notification: next),
       );
-      if (action == 'read') {
-        await api!.call(
-            'POST',
-            '/api/v1/notifications/${Uri.encodeComponent(id)}/action',
-            {'action': 'read'});
-      }
-      if (action == 'later') {
-        await api!.call(
-            'POST',
-            '/api/v1/notifications/${Uri.encodeComponent(id)}/action',
-            {'action': 'snooze'});
-      }
-      if (action == 'read') {
-        await vault.write(key: seenKey, value: id);
-      }
-    } catch (_) {}
+      reminderPopupOpen = false;
+      if (!mounted || action == null) return;
+      await api!.call(
+          'POST',
+          '/api/v1/notifications/${Uri.encodeComponent(id)}/action',
+          {'action': action});
+      if (action != 'snooze') await vault.write(key: seenKey, value: id);
+    } catch (_) {
+      reminderPopupOpen = false;
+    }
   }
 
   Future<void> sync({bool rebuild = false}) async {
@@ -323,11 +344,34 @@ class _HubHomeState extends State<HubHome> with WidgetsBindingObserver {
       uiMode = 'choose';
       tab = 0;
     } catch (e) {
-      error = '$e';
+      if (e is ApiFailure && e.code == 'account_pending') {
+        error = '账户正在等待管理员审核，批准后即可登录';
+      } else {
+        error = '$e';
+      }
     } finally {
       if (mounted) setState(() => busy = false);
     }
     if (engine != null) unawaited(sync());
+  }
+
+  /// Submits an invite-code registration; the server keeps the account
+  /// pending until an administrator approves it.
+  Future<void> register() async {
+    if (api == null || busy) return;
+    setState(() {
+      busy = true;
+      error = null;
+    });
+    try {
+      await api!.register(inviteCode.text.trim(), email.text.trim(),
+          password.text, regNote.text.trim());
+      setState(() => registerDone = true);
+    } catch (e) {
+      error = '$e';
+    } finally {
+      if (mounted) setState(() => busy = false);
+    }
   }
 
   Future<void> editProfile([Json? existing]) async {
@@ -739,7 +783,55 @@ class _HubHomeState extends State<HubHome> with WidgetsBindingObserver {
             Text(
                 '服务器：${selected?['name'] ?? '未选择'} · ${selected?['url'] ?? ''}'),
             const SizedBox(height: 20),
-            if (selected != null) ...[
+            if (selected == null)
+              FilledButton(
+                  onPressed: () => editProfile(), child: const Text('添加服务器'))
+            else if (registerDone) ...[
+              const Text('注册申请已提交，正在等待管理员审核。'),
+              const SizedBox(height: 8),
+              const Text('管理员批准后，使用邮箱和密码登录本服务器；若被拒绝请联系管理员。'),
+              const SizedBox(height: 20),
+              FilledButton(
+                  onPressed: () => setState(() {
+                        registerMode = false;
+                        registerDone = false;
+                        error = null;
+                        password.clear();
+                        inviteCode.clear();
+                        regNote.clear();
+                      }),
+                  child: const Text('返回登录')),
+            ] else if (registerMode) ...[
+              TextField(
+                  controller: inviteCode,
+                  decoration: const InputDecoration(labelText: '邀请码')),
+              const SizedBox(height: 16),
+              TextField(
+                  controller: email,
+                  keyboardType: TextInputType.emailAddress,
+                  decoration: const InputDecoration(labelText: '邮箱')),
+              const SizedBox(height: 16),
+              TextField(
+                  controller: password,
+                  obscureText: true,
+                  decoration: const InputDecoration(labelText: '密码（至少 8 位）')),
+              const SizedBox(height: 16),
+              TextField(
+                  controller: regNote,
+                  decoration: const InputDecoration(labelText: '留言（可选）')),
+              const SizedBox(height: 20),
+              FilledButton(
+                  onPressed: busy ? null : register,
+                  child: const Text('提交注册申请')),
+              TextButton(
+                  onPressed: busy
+                      ? null
+                      : () => setState(() {
+                            registerMode = false;
+                            error = null;
+                          }),
+                  child: const Text('已有账户？返回登录')),
+            ] else ...[
               TextField(
                   controller: email,
                   keyboardType: TextInputType.emailAddress,
@@ -757,10 +849,16 @@ class _HubHomeState extends State<HubHome> with WidgetsBindingObserver {
               FilledButton(
                   onPressed: busy ? null : signIn,
                   child: const Text('进入工作空间 ↗')),
-              const Text('账户由管理员授权；换机请先联系管理员解绑。'),
-            ] else
-              FilledButton(
-                  onPressed: () => editProfile(), child: const Text('添加服务器')),
+              TextButton(
+                  onPressed: busy
+                      ? null
+                      : () => setState(() {
+                            registerMode = true;
+                            error = null;
+                          }),
+                  child: const Text('使用邀请码注册')),
+              const Text('注册需管理员审核；换机请先联系管理员解绑。'),
+            ],
           ]),
         ),
       ]);

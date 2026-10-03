@@ -596,7 +596,7 @@ class _CodexPageState extends State<CodexPage>
         },
       ),
       const SizedBox(height: 8),
-      const Text('规则跨端保存；手机端暂不支持系统级后台推送。'),
+      const Text('规则跨端保存。强提醒在手机上以弹窗显示；应用在后台时从屏幕顶部弹出。'),
       const SizedBox(height: 16),
       if (prefs != null)
         SwitchListTile(

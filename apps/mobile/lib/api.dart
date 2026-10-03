@@ -100,4 +100,13 @@ class HubApi implements Transport {
     await persist(result);
     session = result;
   }
+
+  /// Submits an invite-code registration; the account stays pending until an
+  /// administrator approves it, so no session is created here.
+  Future<void> register(
+      String inviteCode, String email, String password, String note) async {
+    await raw('POST', '/api/v1/auth/register',
+        {'invite_code': inviteCode, 'email': email, 'password': password,
+         'note': note});
+  }
 }
