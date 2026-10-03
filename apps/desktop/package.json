@@ -2,6 +2,7 @@
   "name": "aihub-desktop",
   "version": "1.0.0",
   "description": "AI Hub Codex quota companion",
+  "homepage": "https://hub.example.com",
   "author": "AI Hub",
   "license": "MIT",
   "main": "main.cjs",
