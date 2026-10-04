@@ -153,22 +153,131 @@ func (s *Service) promoteGlobalNews(ctx context.Context, ownerID string, news *c
 	if e := s.DB.QueryRowContext(ctx, `SELECT role FROM users WHERE id=$1 AND account_status='active'`, ownerID).Scan(&role); e != nil || role != "admin" {
 		return
 	}
+	if _, e := s.upsertGlobalNews(ctx, ownerID, news); e != nil {
+		slog.Warn("global news promotion skipped", "error", e)
+	}
+}
+
+// upsertGlobalNews stores the news only when its check is at least as recent
+// as the stored one; reports whether the global row changed.
+func (s *Service) upsertGlobalNews(ctx context.Context, ownerID string, news *codex.News) (bool, error) {
 	var current []byte
 	if e := s.DB.QueryRowContext(ctx, `SELECT payload FROM global_codex_news WHERE id=1`).Scan(&current); e == nil {
 		var existing codex.News
 		if json.Unmarshal(current, &existing) == nil && news.CheckedAt.Before(existing.CheckedAt) {
-			return
+			return false, nil
 		}
 	} else if !errors.Is(e, sql.ErrNoRows) {
-		return
+		return false, e
 	}
 	payload, e := json.Marshal(news)
 	if e != nil {
-		return
+		return false, e
 	}
 	if _, e = s.DB.ExecContext(ctx, `INSERT INTO global_codex_news(id,payload,source_user_id,refreshed_at) VALUES(1,$1,$2,now()) ON CONFLICT (id) DO UPDATE SET payload=excluded.payload,source_user_id=excluded.source_user_id,refreshed_at=now()`, payload, ownerID); e != nil {
-		slog.Warn("global news promotion skipped", "error", e)
+		return false, e
 	}
+	return true, nil
+}
+
+// RadarTokenCreate rotates the long-lived token that the reset-radar
+// automation uses to push checked news straight to the server. The plaintext
+// is returned once; older tokens are revoked on rotation.
+func (s *Service) RadarTokenCreate(w http.ResponseWriter, r *http.Request) {
+	if auth.Who(r).Role != "admin" {
+		httpx.Error(w, 403, "admin_only", "仅管理员可管理雷达令牌")
+		return
+	}
+	var q struct {
+		Note string `json:"note"`
+	}
+	httpx.Decode(r, &q)
+	token := httpx.Token()
+	tx, e := s.DB.BeginTx(r.Context(), nil)
+	if e != nil {
+		httpx.Error(w, 503, "unavailable", "服务暂不可用")
+		return
+	}
+	defer tx.Rollback()
+	if _, e = tx.ExecContext(r.Context(), `UPDATE radar_tokens SET revoked_at=now() WHERE created_by=$1 AND revoked_at IS NULL`, auth.Who(r).UserID); e != nil {
+		httpx.Error(w, 503, "unavailable", "服务暂不可用")
+		return
+	}
+	if _, e = tx.ExecContext(r.Context(), `INSERT INTO radar_tokens(id,token_hash,note,created_by,created_at) VALUES($1,$2,$3,$4,now())`, httpx.NewID("radar"), auth.Hash(token), strings.TrimSpace(q.Note), auth.Who(r).UserID); e != nil {
+		httpx.Error(w, 503, "unavailable", "服务暂不可用")
+		return
+	}
+	if e = tx.Commit(); e != nil {
+		httpx.Error(w, 503, "unavailable", "服务暂不可用")
+		return
+	}
+	httpx.WriteJSON(w, 201, map[string]any{"token": token, "note": strings.TrimSpace(q.Note)})
+}
+
+// RadarTokenStatus reports the active token without leaking the plaintext.
+func (s *Service) RadarTokenStatus(w http.ResponseWriter, r *http.Request) {
+	if auth.Who(r).Role != "admin" {
+		httpx.Error(w, 403, "admin_only", "仅管理员可管理雷达令牌")
+		return
+	}
+	var created time.Time
+	var note string
+	e := s.DB.QueryRowContext(r.Context(), `SELECT created_at,note FROM radar_tokens WHERE created_by=$1 AND revoked_at IS NULL ORDER BY created_at DESC LIMIT 1`, auth.Who(r).UserID).Scan(&created, &note)
+	if errors.Is(e, sql.ErrNoRows) {
+		httpx.WriteJSON(w, 200, map[string]any{"empty": true})
+		return
+	}
+	if e != nil {
+		httpx.Error(w, 503, "unavailable", "服务暂不可用")
+		return
+	}
+	httpx.WriteJSON(w, 200, map[string]any{"created_at": created, "note": note})
+}
+
+// RadarTokenRevoke immediately disables the automation token.
+func (s *Service) RadarTokenRevoke(w http.ResponseWriter, r *http.Request) {
+	if auth.Who(r).Role != "admin" {
+		httpx.Error(w, 403, "admin_only", "仅管理员可管理雷达令牌")
+		return
+	}
+	res, e := s.DB.ExecContext(r.Context(), `UPDATE radar_tokens SET revoked_at=now() WHERE created_by=$1 AND revoked_at IS NULL`, auth.Who(r).UserID)
+	if e != nil {
+		httpx.Error(w, 503, "unavailable", "服务暂不可用")
+		return
+	}
+	rows, _ := res.RowsAffected()
+	httpx.WriteJSON(w, 200, map[string]bool{"revoked": rows > 0})
+}
+
+// RadarNews accepts checked radar news from the reset-radar automation
+// (Bearer radar token) and promotes it for every account.
+func (s *Service) RadarNews(w http.ResponseWriter, r *http.Request) {
+	header := r.Header.Get("Authorization")
+	if !strings.HasPrefix(header, "Bearer ") {
+		httpx.Error(w, 401, "unauthenticated", "雷达令牌缺失")
+		return
+	}
+	var owner string
+	e := s.DB.QueryRowContext(r.Context(), `SELECT created_by FROM radar_tokens WHERE token_hash=$1 AND revoked_at IS NULL`, auth.Hash(strings.TrimPrefix(header, "Bearer "))).Scan(&owner)
+	if errors.Is(e, sql.ErrNoRows) {
+		httpx.Error(w, 401, "radar_token_invalid", "雷达令牌无效或已吊销")
+		return
+	}
+	if e != nil {
+		httpx.Error(w, 503, "unavailable", "服务暂不可用")
+		return
+	}
+	var q codex.News
+	if httpx.Decode(r, &q) != nil || !q.Validate(time.Now()) {
+		httpx.Error(w, 400, "invalid_news", "雷达消息格式无效")
+		return
+	}
+	applied, e := s.upsertGlobalNews(r.Context(), owner, &q)
+	if e != nil {
+		httpx.Error(w, 503, "unavailable", "雷达消息保存失败")
+		return
+	}
+	httpx.WriteJSON(w, 200, map[string]any{"ok": true, "applied": applied, "checked_at": q.CheckedAt})
 }
 func (s *Service) List(w http.ResponseWriter, r *http.Request) {
 	plan, _, pe := getPlan(r.Context(), s.DB, auth.Who(r).UserID)

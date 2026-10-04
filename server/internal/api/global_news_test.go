@@ -97,6 +97,64 @@ func TestGlobalNewsPromotion(t *testing.T) {
 	}
 }
 
+// TestRadarTokenNewsUpload covers the direct automation path: token mint,
+// straight news upload, monotonic guard, auth rejections and revocation.
+func TestRadarTokenNewsUpload(t *testing.T) {
+	database := testdb.Open(t)
+	ts := server(t, database)
+	admin := login(t, ts, true, "desktop")
+	adminToken := admin["token"].(string)
+
+	// Non-administrators cannot mint radar tokens.
+	member := loginDesk(t, ts, adminToken, "radar-collab@example.com")
+	if code, _ := call(t, ts, "POST", "/api/v1/admin/radar-token", member["token"].(string), nil); code != 403 {
+		t.Fatalf("member radar-token create %d", code)
+	}
+
+	// The administrator mints the token; the plaintext is returned once.
+	code, out := call(t, ts, "POST", "/api/v1/admin/radar-token", adminToken, map[string]string{"note": "agent"})
+	if code != 201 || out["token"] == nil {
+		t.Fatalf("radar token create %d %v", code, out)
+	}
+	radarToken := out["token"].(string)
+	if code, out = call(t, ts, "GET", "/api/v1/admin/radar-token", adminToken, nil); code != 200 || out["token"] != nil || out["empty"] == true {
+		t.Fatalf("radar token status %d %v", code, out)
+	}
+
+	// The automation pushes checked news straight to the global radar.
+	fresh := time.Now().UTC().Add(-10 * time.Minute)
+	if code, out := call(t, ts, "POST", "/api/v1/radar/news", radarToken, radarNews(fresh)); code != 200 || out["applied"] != true {
+		t.Fatalf("radar news upload %d %v", code, out)
+	}
+	if got := globalCheckedAt(t, database); got != fresh.Format(time.RFC3339) {
+		t.Fatalf("global checked_at %s", got)
+	}
+
+	// Older news never rolls the radar back.
+	if code, out := call(t, ts, "POST", "/api/v1/radar/news", radarToken, radarNews(fresh.Add(-2*time.Hour))); code != 200 || out["applied"] != false {
+		t.Fatalf("older radar upload %d %v", code, out)
+	}
+
+	// Bad token, invalid news, and session tokens on the automation endpoint are rejected.
+	if code, _ := call(t, ts, "POST", "/api/v1/radar/news", "wrong-token", radarNews(fresh)); code != 401 {
+		t.Fatalf("invalid token %d", code)
+	}
+	if code, _ := call(t, ts, "POST", "/api/v1/radar/news", radarToken, map[string]any{"checked_at": "oops"}); code != 400 {
+		t.Fatalf("invalid news %d", code)
+	}
+	if code, _ := call(t, ts, "POST", "/api/v1/radar/news", adminToken, radarNews(fresh)); code != 401 {
+		t.Fatalf("session token accepted on automation endpoint %d", code)
+	}
+
+	// Revocation stops the automation immediately.
+	if code, _ := call(t, ts, "DELETE", "/api/v1/admin/radar-token", adminToken, nil); code != 200 {
+		t.Fatalf("revoke %d", code)
+	}
+	if code, _ := call(t, ts, "POST", "/api/v1/radar/news", radarToken, radarNews(fresh)); code != 401 {
+		t.Fatalf("revoked token still works %d", code)
+	}
+}
+
 // TestGlobalNewsDistribution covers T3/T5/T7: every account's report carries
 // the promoted radar, zero-device accounts included, and a device's own newer
 // check always wins over the global copy.
