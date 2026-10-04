@@ -9,7 +9,9 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"math"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -140,7 +142,76 @@ func (s *Service) Upload(w http.ResponseWriter, r *http.Request) {
 	if applied && q.News != nil {
 		s.promoteGlobalNews(r.Context(), bridgeOwner, q.News)
 	}
+	if applied {
+		s.rollupUsage(r.Context(), bridgeID, len(old) > 0, &previous, &q)
+	}
 	httpx.WriteJSON(w, 200, map[string]bool{"ok": true, "applied": applied})
+}
+
+// windowKey identifies a window slot across snapshots.
+func windowKey(b codex.Bucket, w *codex.Window) string {
+	d := int64(0)
+	if w != nil {
+		d = w.DurationMinutes
+	}
+	return b.ID + ":" + strconv.FormatInt(d, 10)
+}
+
+// windowDelta folds the previous sample of the same window slot into the
+// current one: consumed percentage points, plus a reset count when the window
+// generation changed (or a Codex-side correction looked like one).
+func windowDelta(prev *codex.Window, cur *codex.Window) (float64, int) {
+	if prev == nil || cur == nil || prev.ResetsAt == nil || cur.ResetsAt == nil {
+		return 0, 0
+	}
+	if *prev.ResetsAt == *cur.ResetsAt {
+		if cur.UsedPercent < prev.UsedPercent-2 {
+			return 0, 1 // drop too large for noise: counted as a reset
+		}
+		return math.Max(0, cur.UsedPercent-prev.UsedPercent), 0
+	}
+	return 0, 1 // generation change: the window was reset
+}
+
+// rollupUsage folds the delta between the previously stored snapshot and the
+// current one into the hourly usage rollup. Best effort by design: analytics
+// never break the quota ingest, and the consumption endpoint replays raw
+// history when a rollup write was missed.
+func (s *Service) rollupUsage(ctx context.Context, bridgeID string, hasPrev bool, prev *codex.Snapshot, cur *codex.Snapshot) {
+	hour := cur.ObservedAt.Truncate(time.Hour)
+	tx, e := s.DB.BeginTx(ctx, nil)
+	if e != nil {
+		return
+	}
+	defer tx.Rollback()
+	for _, b := range cur.Buckets {
+		for slot, w := range []*codex.Window{b.Primary, b.Secondary} {
+			if w == nil {
+				continue
+			}
+			var prevW *codex.Window
+			if hasPrev {
+				for _, pb := range prev.Buckets {
+					if pb.ID == b.ID {
+						prevW = []*codex.Window{pb.Primary, pb.Secondary}[slot]
+						break
+					}
+				}
+			}
+			delta, resets := windowDelta(prevW, w)
+			if _, e = tx.ExecContext(ctx, `INSERT INTO codex_usage_rollup(bridge_id,hour_bucket,window_key,consumed_pp,samples,resets,level_last) VALUES($1,$2,$3,$4,1,$5,$6) ON CONFLICT (bridge_id,hour_bucket,window_key) DO UPDATE SET consumed_pp=codex_usage_rollup.consumed_pp+$4,samples=codex_usage_rollup.samples+1,resets=codex_usage_rollup.resets+$5,level_last=$6`, bridgeID, hour, windowKey(b, w), delta, resets, w.UsedPercent); e != nil {
+				slog.Warn("usage rollup skipped", "error", e)
+				return
+			}
+		}
+	}
+	if _, e = tx.ExecContext(ctx, `INSERT INTO codex_usage_rollup_state(bridge_id,last_observed_at) VALUES($1,$2) ON CONFLICT (bridge_id) DO UPDATE SET last_observed_at=$2`, bridgeID, cur.ObservedAt); e != nil {
+		slog.Warn("usage rollup state skipped", "error", e)
+		return
+	}
+	if e = tx.Commit(); e != nil {
+		slog.Warn("usage rollup skipped", "error", e)
+	}
 }
 
 // promoteGlobalNews copies verified radar news from an administrator's bridge

@@ -53,6 +53,7 @@ func (s *Server) Handler() http.Handler {
 		return s.evaluateUser(ctx, uid)
 	}}
 	mux.Handle("GET /api/v1/codex/overview", authService.Middleware(bridgeService.Overview))
+	mux.Handle("GET /api/v1/codex/consumption", authService.Middleware(bridgeService.Consumption))
 	mux.Handle("GET /api/v1/codex/plan", authService.Middleware(bridgeService.Plan))
 	mux.Handle("PUT /api/v1/codex/plan", authService.Middleware(bridgeService.Plan))
 	mux.Handle("PATCH /api/v1/codex/preferences", authService.Middleware(bridgeService.Preferences))
