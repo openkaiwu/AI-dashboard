@@ -1,13 +1,11 @@
 import {useEffect,useState} from "react";
 import {request} from "./api";
-import {friendlyError} from "./errors";
 type UsageSeries={bucket_start:string;consumed_pp:number|null;level_end:number|null;peak_pp_hour:number|null;resets:number|null;coverage_hours:number};
 type UsageGeneration={resets_at:number|null;start:string;end:string;points:{t:string;used:number}[]};
 type UsageWindow={id:string;duration_minutes:number;present:boolean};
 type Hourly={hour:string;consumed_pp:number;samples:number;resets:number};
 type Tip={x:number;y:number;lines:string[]};
 type UsageData={generated_at:string;tz_offset_minutes:number;windows?:UsageWindow[];series?:UsageSeries[];generations?:UsageGeneration[];coverage?:{first_day:string;days_with_data:number};reference_pp?:number;plan_type?:string;compare?:{this_pp:number;prev_pp:number;ratio?:number}};
-const DUR_LABEL:Record<number,string>={300:"5 小时窗口",10080:"7 天窗口"};
 const PLAN_LABEL:Record<string,string>={plus:"Plus",pro:"Pro",prolite:"Pro Lite",unknown:"套餐未确认"};
 const when=(v:string)=>new Date(v).toLocaleString();
 const sum=(a:UsageSeries[])=>a.reduce((x,s)=>x+(s.consumed_pp||0),0);
@@ -34,6 +32,7 @@ export default function UsageTab(){
  const fiveOK=(planType==="plus"||planType==="pro")&&!!d300?.windows?.find(w=>w.duration_minutes===300&&w.present);
  const daily=(d30?.series||[]).filter(s=>s.consumed_pp!=null);
  const last7=daily.slice(-7);
+ const last7sum=last7.reduce((a,s)=>a+(s.consumed_pp||0),0);
  const last24=(h24?.hourly||[]).reduce((a,h)=>a+(h.consumed_pp||0),0);
  const wGen=(w10080?.generations||[]);
  const wCur=wGen.length>0?wGen[wGen.length-1].points[wGen[wGen.length-1].points.length-1]:null;
@@ -46,7 +45,7 @@ export default function UsageTab(){
   {!loading&&error&&<p className="error" role="alert">{error} <button className="btn ghost" onClick={()=>void reloadAll()}>重试</button></p>}
   {!loading&&<>
   <article className="device-card">
-   <h2>⏱ 五小时窗口（实时）{data?.plan_type&&<span className="device-tag" style={{marginLeft:8}}>{PLAN_LABEL[planType]||planType}</span>}</h2>
+   <h2>⏱ 五小时窗口（实时）{planType!=="unknown"&&<span className="device-tag" style={{marginLeft:8}}>{PLAN_LABEL[planType]||planType}</span>}</h2>
    {fiveOK&&d300&&d300.generations&&d300.generations.length>0?(()=>{
     const gens=d300.generations;
     const cur=gens[gens.length-1];
