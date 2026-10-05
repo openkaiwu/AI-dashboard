@@ -7,7 +7,7 @@ const path=require('node:path');
 const platform=require('./platform.cjs');
 
 const LOCAL_ORIGIN='http://127.0.0.1:8080';
-const DEFAULT_CLOUD='https://hub.example.com';
+const DEFAULT_CLOUD='http://127.0.0.1:8080';
 let lastError='';
 let managed={server:null,bridge:null};
 let cachedConfig=null;

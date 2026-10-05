@@ -2,7 +2,7 @@
   "name": "aihub-desktop",
   "version": "1.0.0",
   "description": "AI Hub Codex quota companion",
-  "homepage": "https://hub.example.com",
+  "homepage": "http://127.0.0.1:8080",
   "author": {
     "name": "AI Hub",
     "email": "318460916+openkaiwu@users.noreply.github.com"

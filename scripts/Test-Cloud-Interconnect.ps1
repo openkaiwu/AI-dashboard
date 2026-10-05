@@ -1,5 +1,5 @@
 param(
-    [string]$Base = 'https://hub.example.com',
+    [string]$Base = 'http://127.0.0.1:8080',
     [string]$AdminEmail = '',
     [string]$AdminPassword = '',
     [string]$UserEmail = '',
