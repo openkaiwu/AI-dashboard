@@ -6,6 +6,18 @@
 参考 codex-quota-band 的设备同步与隐私边界，按 Linear M0 实现 PostgreSQL + Flutter/Drift + 增量同步。
 不包含小米手环功能。
 
+## 📖 使用文档
+
+**从零部署到日常使用的完整手册见 [docs/USAGE_ZH.md](docs/USAGE_ZH.md)**：服务器部署（脚本/Docker/手动）、管理员初始化、客户端接入、邀请码注册、重置雷达令牌、消耗分析、配置参考与故障排查。
+
+| 我想要 | 去哪里 |
+|---|---|
+| 5 分钟本地体验 | 本文 §本地演示，或 [使用文档 §2.1](docs/USAGE_ZH.md) |
+| 部署自己的服务器 | [使用文档 §2.2](docs/USAGE_ZH.md)（脚本 / Docker / 手动） |
+| 日常使用说明 | [使用文档 §3](docs/USAGE_ZH.md) |
+| 管理员操作 | [使用文档 §4](docs/USAGE_ZH.md) |
+| 从源码构建 / CI 出包 | [使用文档 §6](docs/USAGE_ZH.md) |
+
 ## Codex 智能提醒
 
 首页已特化为 Codex 额度节奏助手：多用/慢用建议、重置卡到期提醒、近 6 小时趋势、跨端规则、免打扰与 Tibo 消息。见 [规则与通知说明](docs/CODEX_ADVISOR_ZH.md)。
@@ -53,9 +65,7 @@ powershell -ExecutionPolicy Bypass -File scripts/Stop-Local.ps1
 - [验证记录与尚未验证的内容](docs/VALIDATION.md)
 - [上游版本与授权来源](docs/UPSTREAM.md)
 
-旧 M0 运行包：artifacts/aihub-m0-runtime.zip。M1/M2 分支的源码检查与交叉编译已完成；当前旧运行进程与安装包尚未替换。
-运行包不含数据库、账号凭据或示例用户数据；请配置自己的 PostgreSQL。
-Android APK 和 Windows Flutter 原生客户端未在本机打包；可运行桌面产物为服务端 + Web/PWA。
+服务器运行包（`artifacts/aihub-m0-runtime.zip`，内嵌 Web 的单二进制）由 `scripts/build.sh` 或 `scripts/Build-Release.ps1` 产出，不含数据库、账号凭据或示例数据；请配置自己的 PostgreSQL。桌面（Windows/Linux/macOS）与移动端（Android/iOS）构建方式见 [使用文档 §6](docs/USAGE_ZH.md)。
 
 ## 验证与构建
 
