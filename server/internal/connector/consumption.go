@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -46,7 +47,7 @@ func (s *Service) Consumption(w http.ResponseWriter, r *http.Request) {
 	uid := auth.Who(r).UserID
 	granularity := r.URL.Query().Get("granularity")
 	switch granularity {
-	case "", "window", "daily", "weekly", "monthly":
+	case "", "window", "hourly", "daily", "weekly", "monthly":
 	default:
 		httpx.Error(w, 400, "invalid_granularity", "granularity 取值非法")
 		return
@@ -59,13 +60,28 @@ func (s *Service) Consumption(w http.ResponseWriter, r *http.Request) {
 	}
 	loc := time.FixedZone("hub", tz*60)
 	now := time.Now().UTC()
+	plan, _, pe := getPlan(r.Context(), s.DB, uid)
+	if pe != nil {
+		plan = "unknown"
+	}
+	if granularity == "hourly" {
+		out, e := s.consumptionHourly(r.Context(), uid, now, r.URL.Query())
+		if e != nil {
+			httpx.Error(w, 503, "unavailable", "消耗数据暂不可用")
+			return
+		}
+		out["plan_type"] = plan
+		out["tz_offset_minutes"] = tz
+		httpx.WriteJSON(w, 200, out)
+		return
+	}
 
 	// Raw-history samples only survive 7 days, so the fine view reads
 	// codex_history directly while coarser views read the hourly rollup.
 	// Both paths first replay any raw samples the rollup does not cover yet
 	// (initial backfill and self-healing after a missed rollup write).
 	if granularity == "window" {
-		out, e := s.consumptionWindow(r.Context(), uid, now, loc, r.URL.Query().Get("window"))
+		out, e := s.consumptionWindow(r.Context(), uid, now, loc, r.URL.Query().Get("window"), plan)
 		if e != nil {
 			httpx.Error(w, 503, "unavailable", "消耗数据暂不可用")
 			return
@@ -76,6 +92,11 @@ func (s *Service) Consumption(w http.ResponseWriter, r *http.Request) {
 	}
 
 	days := map[string]int{"daily": 30, "weekly": 84, "monthly": 365}[granularity]
+	if v := r.URL.Query().Get("days"); v != "" {
+		if n, e := strconv.Atoi(v); e == nil && n >= 7 && n <= 365 && n < days {
+			days = n
+		}
+	}
 	if e := s.ensureRollups(r.Context(), uid); e != nil {
 		httpx.Error(w, 503, "unavailable", "消耗数据暂不可用")
 		return
@@ -199,6 +220,41 @@ func (s *Service) Consumption(w http.ResponseWriter, r *http.Request) {
 			daysWithData++
 		}
 	}
+	reference := 0.0
+	for _, w := range windows {
+		if w.Present && w.DurationMinutes > 0 {
+			perDay := 100 / (float64(w.DurationMinutes) / 1440)
+			switch granularity {
+			case "weekly":
+				perDay *= 7
+			case "monthly":
+				perDay *= 30
+			}
+			reference += perDay
+		}
+	}
+	compare := map[string]any(nil)
+	if r.URL.Query().Get("compare") == "true" && (granularity == "weekly" || granularity == "monthly") {
+		periodDays := map[string]int{"weekly": 7, "monthly": 30}[granularity]
+		thisStart := bucketStart(now, loc, granularity)
+		prevStart := thisStart.AddDate(0, 0, -periodDays)
+		elapsed := now.Sub(thisStart)
+		sumRange := func(from, to time.Time) float64 {
+			sumv := 0.0
+			for _, h := range hours {
+				if !h.hour.Before(from) && h.hour.Before(to) {
+					sumv += h.consumed
+				}
+			}
+			return sumv
+		}
+		thisPP := sumRange(thisStart, now)
+		prevPP := sumRange(prevStart, prevStart.Add(elapsed))
+		compare = map[string]any{"this_pp": thisPP, "prev_pp": prevPP, "elapsed_hours": elapsed.Hours()}
+		if prevPP > 0 {
+			compare["ratio"] = thisPP / prevPP
+		}
+	}
 	httpx.WriteJSON(w, 200, map[string]any{
 		"generated_at":       now,
 		"tz_offset_minutes":  tz,
@@ -206,12 +262,15 @@ func (s *Service) Consumption(w http.ResponseWriter, r *http.Request) {
 		"series":             series,
 		"coverage":           map[string]any{"first_day": firstDay, "days_with_data": daysWithData, "granularity": granularity},
 		"accumulating_since": firstDay,
+		"reference_pp":       reference,
+		"plan_type":          plan,
+		"compare":            compare,
 	})
 }
 
 // consumptionWindow returns the raw per-generation series for the live
 // window view; every generation (reset) breaks the line.
-func (s *Service) consumptionWindow(ctx context.Context, uid string, now time.Time, loc *time.Location, windowFilter string) (map[string]any, error) {
+func (s *Service) consumptionWindow(ctx context.Context, uid string, now time.Time, loc *time.Location, windowFilter string, plan string) (map[string]any, error) {
 	rows, e := s.DB.QueryContext(ctx, `SELECT observed_at,snapshot FROM codex_history WHERE bridge_id IN (SELECT id FROM codex_bridges WHERE user_id=$1 AND revoked_at IS NULL) AND observed_at>now()-interval '7 days' ORDER BY observed_at`, uid)
 	if e != nil {
 		return nil, e
@@ -271,7 +330,7 @@ func (s *Service) consumptionWindow(ctx context.Context, uid string, now time.Ti
 		}
 		outGens = append(outGens, consumptionGeneration{ResetsAt: g.ResetsAt, Start: g.Start.Format(time.RFC3339), End: g.End.Format(time.RFC3339), Points: g.Points})
 	}
-	return map[string]any{"generated_at": now, "windows": windowCapability(latest), "generations": outGens}, nil
+	return map[string]any{"generated_at": now, "windows": windowCapability(latest), "generations": outGens, "plan_type": plan}, nil
 }
 
 // windowCapability reports which window durations the newest snapshot carried.
@@ -453,4 +512,42 @@ func nextBucket(t time.Time, loc *time.Location, granularity string) time.Time {
 	default:
 		return t.AddDate(0, 0, 1)
 	}
+}
+
+// consumptionHourly returns the per-hour consumed series from the rollup,
+// optionally filtered to one window duration.
+func (s *Service) consumptionHourly(ctx context.Context, uid string, now time.Time, qp url.Values) (map[string]any, error) {
+	hours := 24
+	if v := qp.Get("hours"); v != "" {
+		if n, e := strconv.Atoi(v); e == nil && n >= 1 && n <= 168 {
+			hours = n
+		}
+	}
+	if e := s.ensureRollups(ctx, uid); e != nil {
+		return nil, e
+	}
+	rows, e := s.DB.QueryContext(ctx, `SELECT hour_bucket,window_key,consumed_pp,samples,resets FROM codex_usage_rollup WHERE bridge_id IN (SELECT id FROM codex_bridges WHERE user_id=$1 AND revoked_at IS NULL) AND hour_bucket>now()-($2 * interval '1 hour') ORDER BY hour_bucket`, uid, hours)
+	if e != nil {
+		return nil, e
+	}
+	defer rows.Close()
+	windowFilter := qp.Get("window")
+	hourly := []map[string]any{}
+	for rows.Next() {
+		var hour time.Time
+		var key string
+		var consumed float64
+		var samples, resets int
+		if e = rows.Scan(&hour, &key, &consumed, &samples, &resets); e != nil {
+			return nil, e
+		}
+		if windowFilter != "" && !strings.HasSuffix(key, ":"+windowFilter) {
+			continue
+		}
+		hourly = append(hourly, map[string]any{"hour": hour.Format(time.RFC3339), "consumed_pp": consumed, "samples": samples, "resets": resets})
+	}
+	if e = rows.Err(); e != nil {
+		return nil, e
+	}
+	return map[string]any{"hours": hours, "hourly": hourly}, nil
 }

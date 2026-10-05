@@ -108,6 +108,56 @@ func TestConsumptionRollupAndAPI(t *testing.T) {
 	}
 }
 
+
+// TestConsumptionHourlyAndCompare covers the hourly granularity (one-day
+// panel) and the weekly compare payload (one-week panel).
+func TestConsumptionHourlyAndCompare(t *testing.T) {
+	database := testdb.Open(t)
+	ts := server(t, database)
+	admin := login(t, ts, true, "desktop")
+	token := admin["token"].(string)
+	bridgeToken := bridgeFor(t, ts, token)
+
+	base := time.Now().UTC().Add(-3 * time.Hour).Truncate(time.Hour)
+	resetsA := base.Add(96 * time.Hour).Unix()
+	resetsB := resetsA + 3600
+	if code, _ := call(t, ts, "POST", "/api/v1/codex/snapshot", bridgeToken, usageSnapshot(base, resetsA, 10)); code != 200 {
+		t.Fatalf("s1")
+	}
+	if code, _ := call(t, ts, "POST", "/api/v1/codex/snapshot", bridgeToken, usageSnapshot(base.Add(time.Hour), resetsA, 18)); code != 200 {
+		t.Fatalf("s2")
+	}
+	if code, _ := call(t, ts, "POST", "/api/v1/codex/snapshot", bridgeToken, usageSnapshot(base.Add(2*time.Hour), resetsB, 3)); code != 200 {
+		t.Fatalf("s3")
+	}
+
+	code, out := call(t, ts, "GET", "/api/v1/codex/consumption?granularity=hourly&hours=24", token, nil)
+	if code != 200 {
+		t.Fatalf("hourly %d", code)
+	}
+	total, resetsTotal := 0.0, 0
+	for _, e := range out["hourly"].([]any) {
+		h := e.(map[string]any)
+		total += h["consumed_pp"].(float64)
+		resetsTotal += int(h["resets"].(float64))
+	}
+	if total != 8 || resetsTotal != 1 {
+		t.Fatalf("hourly total %v resets %v", total, resetsTotal)
+	}
+	if out["plan_type"] == nil {
+		t.Fatalf("hourly missing plan_type")
+	}
+
+	code, out = call(t, ts, "GET", "/api/v1/codex/consumption?granularity=weekly&compare=true", token, nil)
+	if code != 200 || out["compare"] == nil || out["plan_type"] == nil {
+		t.Fatalf("weekly compare %d %v", code, out)
+	}
+	code, out = call(t, ts, "GET", "/api/v1/codex/consumption?granularity=window&window=300", token, nil)
+	if code != 200 || out["plan_type"] == nil {
+		t.Fatalf("window plan_type %d %v", code, out)
+	}
+}
+
 // TestConsumptionBackfill verifies that raw history inserted before the
 // rollup existed is replayed into the daily view by the self-healing path.
 func TestConsumptionBackfill(t *testing.T) {
