@@ -1,5 +1,6 @@
 import {FormEvent,useEffect,useState} from "react";
 import {request} from "../api";
+import {friendlyError} from "../errors";
 import {saveSession} from "../session";
 type User={id:string;email:string;role:string;status:string;created_at:string};
 type Device={id:string;name:string;kind:string;revoked_at:string|null};
@@ -15,7 +16,7 @@ export default function Admin(){
  const[regs,setRegs]=useState<Registration[]>([]),[invites,setInvites]=useState<Invite[]>([]),[newCode,setNewCode]=useState("");
 	const[inviteNote,setInviteNote]=useState(""),[inviteDays,setInviteDays]=useState(""),[inviteMaxUses,setInviteMaxUses]=useState(""),[inviteBusy,setInviteBusy]=useState(false);
 	const[radarInfo,setRadarInfo]=useState<{empty?:boolean;created_at?:string;note?:string}|null>(null),[radarToken,setRadarToken]=useState(""),[radarNote,setRadarNote]=useState(""),[radarBusy,setRadarBusy]=useState(false);
- async function reload(){try{const data=await request<{users:User[]}>("/api/v1/admin/users");setUsers(data.users);setError("");}catch(e){setError(String(e));}
+ async function reload(){try{const data=await request<{users:User[]}>("/api/v1/admin/users");setUsers(data.users);setError("");}catch(e){setError(friendlyError(e));}
   try{setReport(await request<Report>("/api/v1/admin/telemetry"));}catch{}
   try{setOps(await request<Operations>("/api/v1/admin/operations"));}catch{}
   try{setRegs((await request<{registrations:Registration[]}>("/api/v1/admin/registrations")).registrations);}catch{}
@@ -23,17 +24,17 @@ export default function Admin(){
   try{setRadarInfo(await request<{empty?:boolean;created_at?:string;note?:string}>("/api/v1/admin/radar-token"));}catch{}
  }
  useEffect(()=>{void reload();},[]);
- async function create(e:FormEvent){e.preventDefault();setBusy(true);try{await request("/api/v1/admin/users",{method:"POST",body:JSON.stringify({email,password})});setEmail("");setPassword("");await reload();}catch(e){setError(String(e));}finally{setBusy(false);}}
- async function toggle(u:User){try{await request(`/api/v1/admin/users/${u.id}/status`,{method:"PATCH",body:JSON.stringify({status:u.status==='active'?'disabled':'active'})});await reload();}catch(e){setError(String(e));}}
- async function reset(u:User){const next=prompt(`为 ${u.email} 设置新密码（8–72 字节）`);if(!next)return;try{await request(`/api/v1/admin/users/${u.id}/password`,{method:"POST",body:JSON.stringify({password:next})});}catch(e){setError(String(e));}}
- async function openDevices(u:User){try{const data=await request<{devices:Device[]}>(`/api/v1/admin/users/${u.id}/devices`);setDevices(old=>({...old,[u.id]:data.devices}));}catch(e){setError(String(e));}}
- async function unbind(u:User,d:Device){if(!confirm(`解绑 ${u.email} 的 ${d.name}？该设备的会话和采集连接会立即失效。`))return;try{await request(`/api/v1/admin/users/${u.id}/devices/${d.id}`,{method:"DELETE"});await openDevices(u);}catch(e){setError(String(e));}}
- async function createInvite(e:FormEvent){e.preventDefault();setInviteBusy(true);try{const data=await request<{code:string}>("/api/v1/admin/invites",{method:"POST",body:JSON.stringify({note:inviteNote,days:Number(inviteDays||0),max_uses:Number(inviteMaxUses||1)})});setNewCode(data.code);setInviteNote("");setInviteDays("");setInviteMaxUses("");await reload();}catch(e){setError(String(e));}finally{setInviteBusy(false);}}
- async function toggleInvite(v:Invite){try{await request(`/api/v1/admin/invites/${v.id}/status`,{method:"PATCH",body:JSON.stringify({status:v.status==='active'?'revoked':'active'})});await reload();}catch(e){setError(String(e));}}
- async function rotateRadar(e:FormEvent){e.preventDefault();setRadarBusy(true);try{const data=await request<{token:string}>("/api/v1/admin/radar-token",{method:"POST",body:JSON.stringify({note:radarNote})});setRadarToken(data.token);setRadarNote("");await reload();}catch(e){setError(String(e));}finally{setRadarBusy(false);}}
- async function revokeRadar(){if(!confirm("吊销雷达令牌？自动化任务将立即无法直传检查结果。"))return;try{await request("/api/v1/admin/radar-token",{method:"DELETE"});setRadarToken("");await reload();}catch(e){setError(String(e));}}
- async function approveReg(r:Registration){if(!confirm(`批准 ${r.email} 的注册申请？批准后该用户即可登录。`))return;try{await request(`/api/v1/admin/registrations/${r.id}/approve`,{method:"POST",body:JSON.stringify({})});await reload();}catch(e){setError(String(e));}}
- async function rejectReg(r:Registration){const reason=prompt(`拒绝 ${r.email} 的注册申请，请填写原因（将留存审计）：`);if(!reason)return;try{await request(`/api/v1/admin/registrations/${r.id}/reject`,{method:"POST",body:JSON.stringify({reason})});await reload();}catch(e){setError(String(e));}}
+ async function create(e:FormEvent){e.preventDefault();setBusy(true);try{await request("/api/v1/admin/users",{method:"POST",body:JSON.stringify({email,password})});setEmail("");setPassword("");await reload();}catch(e){setError(friendlyError(e));}finally{setBusy(false);}}
+ async function toggle(u:User){try{await request(`/api/v1/admin/users/${u.id}/status`,{method:"PATCH",body:JSON.stringify({status:u.status==='active'?'disabled':'active'})});await reload();}catch(e){setError(friendlyError(e));}}
+ async function reset(u:User){const next=prompt(`为 ${u.email} 设置新密码（8–72 字节）`);if(!next)return;try{await request(`/api/v1/admin/users/${u.id}/password`,{method:"POST",body:JSON.stringify({password:next})});}catch(e){setError(friendlyError(e));}}
+ async function openDevices(u:User){try{const data=await request<{devices:Device[]}>(`/api/v1/admin/users/${u.id}/devices`);setDevices(old=>({...old,[u.id]:data.devices}));}catch(e){setError(friendlyError(e));}}
+ async function unbind(u:User,d:Device){if(!confirm(`解绑 ${u.email} 的 ${d.name}？该设备的会话和采集连接会立即失效。`))return;try{await request(`/api/v1/admin/users/${u.id}/devices/${d.id}`,{method:"DELETE"});await openDevices(u);}catch(e){setError(friendlyError(e));}}
+ async function createInvite(e:FormEvent){e.preventDefault();setInviteBusy(true);try{const data=await request<{code:string}>("/api/v1/admin/invites",{method:"POST",body:JSON.stringify({note:inviteNote,days:Number(inviteDays||0),max_uses:Number(inviteMaxUses||1)})});setNewCode(data.code);setInviteNote("");setInviteDays("");setInviteMaxUses("");await reload();}catch(e){setError(friendlyError(e));}finally{setInviteBusy(false);}}
+ async function toggleInvite(v:Invite){try{await request(`/api/v1/admin/invites/${v.id}/status`,{method:"PATCH",body:JSON.stringify({status:v.status==='active'?'revoked':'active'})});await reload();}catch(e){setError(friendlyError(e));}}
+ async function rotateRadar(e:FormEvent){e.preventDefault();setRadarBusy(true);try{const data=await request<{token:string}>("/api/v1/admin/radar-token",{method:"POST",body:JSON.stringify({note:radarNote})});setRadarToken(data.token);setRadarNote("");await reload();}catch(e){setError(friendlyError(e));}finally{setRadarBusy(false);}}
+ async function revokeRadar(){if(!confirm("吊销雷达令牌？自动化任务将立即无法直传检查结果。"))return;try{await request("/api/v1/admin/radar-token",{method:"DELETE"});setRadarToken("");await reload();}catch(e){setError(friendlyError(e));}}
+ async function approveReg(r:Registration){if(!confirm(`批准 ${r.email} 的注册申请？批准后该用户即可登录。`))return;try{await request(`/api/v1/admin/registrations/${r.id}/approve`,{method:"POST",body:JSON.stringify({})});await reload();}catch(e){setError(friendlyError(e));}}
+ async function rejectReg(r:Registration){const reason=prompt(`拒绝 ${r.email} 的注册申请，请填写原因（将留存审计）：`);if(!reason)return;try{await request(`/api/v1/admin/registrations/${r.id}/reject`,{method:"POST",body:JSON.stringify({reason})});await reload();}catch(e){setError(friendlyError(e));}}
  return <section className="panel"><p className="eyebrow">AI HUB ADMIN</p><h1>账户授权与设备绑定</h1><p>账户由管理员创建。每个账户只能绑定一台电脑和一台手机。</p>{error&&<p className="error" role="alert">{error}</p>}
  <form onSubmit={e=>void create(e)}><h2>创建账户</h2><label className="field"><span>邮箱</span><input type="email" required value={email} onChange={e=>setEmail(e.target.value)}/></label><label className="field"><span>初始密码</span><input type="password" minLength={8} required value={password} onChange={e=>setPassword(e.target.value)}/></label><button className="btn" disabled={busy}>创建并授权</button></form>
  <h2>注册审核{regs.some(r=>r.status==='pending')?`（${regs.filter(r=>r.status==='pending').length} 待审核）`:""}</h2>
