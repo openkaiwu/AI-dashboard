@@ -5,6 +5,13 @@ import 'api.dart';
 import 'store.dart';
 import 'theme.dart';
 
+const Map<String, String> planLabel = {
+  'plus': 'Plus',
+  'pro': 'Pro',
+  'prolite': 'Pro Lite',
+  'unknown': '套餐未确认',
+};
+
 class CodexPage extends StatefulWidget {
   final HubApi api;
   final HubStore store;
@@ -18,6 +25,10 @@ class CodexPage extends StatefulWidget {
 class _CodexPageState extends State<CodexPage>
     with SingleTickerProviderStateMixin {
   Json? overview;
+  Json? consumptionDaily;
+  Json? consumptionHourly;
+  Json? consumptionWeekly;
+  Json? consumptionMonthly;
   String? error;
   bool busy = false;
   Timer? timer;
@@ -29,7 +40,7 @@ class _CodexPageState extends State<CodexPage>
   @override
   void initState() {
     super.initState();
-    tabs = TabController(length: 5, vsync: this);
+    tabs = TabController(length: 6, vsync: this);
     unawaited(load());
     timer =
         Timer.periodic(const Duration(minutes: 5), (_) => unawaited(refresh()));
@@ -74,6 +85,24 @@ class _CodexPageState extends State<CodexPage>
       }
     } finally {
       if (mounted) setState(() => busy = false);
+    }
+    unawaited(loadConsumption());
+  }
+
+  // Best-effort fetches for the consumption panels; failures leave the
+  // panels showing their empty states without affecting the overview.
+  Future<void> loadConsumption() async {
+    for (final entry in [
+      ('daily&days=30', (Json j) => consumptionDaily = j),
+      ('hourly&hours=24', (Json j) => consumptionHourly = j),
+      ('weekly&compare=true', (Json j) => consumptionWeekly = j),
+      ('monthly', (Json j) => consumptionMonthly = j),
+    ]) {
+      try {
+        final data =
+            await widget.api.call('GET', '/api/v1/codex/consumption?granularity=${entry.$1}');
+        if (mounted) setState(() => entry.$2(data));
+      } catch (_) {}
     }
   }
 
@@ -571,6 +600,180 @@ class _CodexPageState extends State<CodexPage>
     ]);
   }
 
+
+  Widget consumptionTab() {
+    final planType =
+        (overview?['plan']?['plan_type'] ?? 'unknown') as String;
+    final fiveCapable = planType == 'plus' || planType == 'pro';
+    double? fiveUsed;
+    double? weeklyUsed;
+    for (final d in (overview?['devices'] ?? []) as List) {
+      for (final b in ((d as Json)['snapshot']?['buckets'] ?? []) as List) {
+        final w = (b as Json)['primary'] as Json?;
+        if (w == null) continue;
+        final dur = (w['duration_minutes'] as num).toInt();
+        final used = (w['used_percent'] as num?)?.toDouble();
+        if (dur == 300 && fiveUsed == null) fiveUsed = used;
+        if (dur == 10080 && weeklyUsed == null) weeklyUsed = used;
+      }
+    }
+    final daily =
+        ((consumptionDaily?['series'] ?? []) as List).cast<Json>();
+    final hourly =
+        ((consumptionHourly?['hourly'] ?? []) as List).cast<Json>();
+    final compare = consumptionWeekly?['compare'] as Json?;
+    final monthly =
+        ((consumptionMonthly?['series'] ?? []) as List).cast<Json>();
+    double sumRows(List<Json> rows) =>
+        rows.fold(0.0, (a, r) => a + ((r['consumed_pp'] as num?) ?? 0));
+    final last24 =
+        hourly.fold(0.0, (a, h) => a + ((h['consumed_pp'] as num?) ?? 0));
+    final last7 =
+        daily.length >= 7 ? daily.sublist(daily.length - 7) : daily;
+    return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text('消耗分析', style: Theme.of(context).textTheme.titleMedium),
+          const Text('四个时间维度的额度消耗；重置不算消耗，空档表示无样本。'),
+          const SizedBox(height: 12),
+          Card(
+              child: Padding(
+                  padding: const EdgeInsets.all(14),
+                  child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('五小时窗口（实时）',
+                            style: Theme.of(context).textTheme.titleSmall),
+                        const SizedBox(height: 6),
+                        if (fiveCapable && fiveUsed != null) ...[
+                          Text('${(100 - fiveUsed).toStringAsFixed(0)}% 剩余',
+                              style: Theme.of(context)
+                                  .textTheme
+                                  .headlineSmall),
+                          const Text('触顶预测与重置倒计时见桌面端；本机采集为准。'),
+                        ] else if (fiveCapable)
+                          const Text('Codex 暂未返回五小时窗口。')
+                        else
+                          Text(
+                              '当前套餐（${planLabel[planType] ?? planType}）未上报五小时窗口。'),
+                      ]))),
+          Card(
+              child: Padding(
+                  padding: const EdgeInsets.all(14),
+                  child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('一天 · 近 24 小时',
+                            style: Theme.of(context).textTheme.titleSmall),
+                        Text('${last24.toStringAsFixed(1)} pp',
+                            style: Theme.of(context)
+                                .textTheme
+                                .headlineSmall),
+                        const SizedBox(height: 6),
+                        for (final h in hourly.skip(
+                            hourly.length > 6 ? hourly.length - 6 : 0))
+                          Padding(
+                              padding:
+                                  const EdgeInsets.symmetric(vertical: 2),
+                              child: Row(children: [
+                                SizedBox(
+                                    width: 110,
+                                    child: Text(when(h['hour'].toString()),
+                                        style:
+                                            const TextStyle(fontSize: 11))),
+                                Expanded(
+                                    child: LinearProgressIndicator(
+                                        value: ((h['consumed_pp']
+                                                        as num?) ??
+                                                    0) /
+                                                100,
+                                        minHeight: 6)),
+                                SizedBox(
+                                    width: 58,
+                                    child: Text(
+                                        '${((h['consumed_pp'] as num?) ?? 0).toStringAsFixed(1)} pp',
+                                        textAlign: TextAlign.right,
+                                        style: const TextStyle(
+                                            fontSize: 11))),
+                              ])),
+                        if (hourly.isEmpty)
+                          const Text('最近 24 小时暂无小时样本。'),
+                      ]))),
+          Card(
+              child: Padding(
+                  padding: const EdgeInsets.all(14),
+                  child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('一周 · 近 7 天',
+                            style: Theme.of(context).textTheme.titleSmall),
+                        Text('${sumRows(last7).toStringAsFixed(1)} pp',
+                            style: Theme.of(context)
+                                .textTheme
+                                .headlineSmall),
+                        const SizedBox(height: 6),
+                        for (final r in last7)
+                          Padding(
+                              padding:
+                                  const EdgeInsets.symmetric(vertical: 2),
+                              child: Row(children: [
+                                SizedBox(
+                                    width: 76,
+                                    child: Text(
+                                        r['bucket_start']
+                                            .toString()
+                                            .substring(5),
+                                        style:
+                                            const TextStyle(fontSize: 11))),
+                                Expanded(
+                                    child: LinearProgressIndicator(
+                                        value: ((r['consumed_pp']
+                                                        as num?) ??
+                                                    0) /
+                                                100,
+                                        minHeight: 6)),
+                                SizedBox(
+                                    width: 58,
+                                    child: Text(
+                                        '${((r['consumed_pp'] as num?) ?? 0).toStringAsFixed(1)} pp',
+                                        textAlign: TextAlign.right,
+                                        style: const TextStyle(
+                                            fontSize: 11))),
+                              ])),
+                        if (weeklyUsed != null)
+                          Padding(
+                              padding: const EdgeInsets.only(top: 6),
+                              child: Text(
+                                  '周窗口（Codex 原生）：已用 ${weeklyUsed.toStringAsFixed(0)}% —— 与"近 7 天消耗"口径不同。')),
+                        if (compare != null)
+                          Text(
+                              '本日历周 ${((compare['this_pp'] as num?) ?? 0).toStringAsFixed(1)} pp · 上周同期 ${((compare['prev_pp'] as num?) ?? 0).toStringAsFixed(1)} pp'),
+                      ]))),
+          Card(
+              child: Padding(
+                  padding: const EdgeInsets.all(14),
+                  child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('一月 · 近 30 天',
+                            style: Theme.of(context).textTheme.titleSmall),
+                        Text('${sumRows(daily).toStringAsFixed(1)} pp',
+                            style: Theme.of(context)
+                                .textTheme
+                                .headlineSmall),
+                        const SizedBox(height: 6),
+                        if (monthly.isEmpty)
+                          const Text('月度数据积累中。')
+                        else
+                          for (final m in monthly)
+                            Text(
+                                '${m['bucket_start'].toString().substring(0, 7)}：${m['consumed_pp'] == null ? "积累中" : "${(m['consumed_pp'] as num).toStringAsFixed(1)} pp"}'),
+                        Text(
+                            '30 天日均 ${(sumRows(daily) / (daily.isEmpty ? 1 : daily.length)).toStringAsFixed(1)} pp · 覆盖 ${daily.length} 天。'),
+                      ]))),
+        ]);
+  }
+
   Widget settingsTab() {
     final prefs = overview?['preferences'] as Json?;
     final plan = overview?['plan'] as Json?;
@@ -680,7 +883,7 @@ class _CodexPageState extends State<CodexPage>
           child: Text(error!, style: const TextStyle(color: HubTheme.warn)),
         ),
       if (overview?['plan']?['plan_type'] == 'unknown')
-        const Text('Codex 套餐尚未确认，请在提醒设置中选择 Plus 或 Pro。'),
+        const Text('Codex 套餐尚未确认，请在提醒设置中选择套餐。'),
       const SizedBox(height: 12),
       TabBar(
         controller: tabs,
@@ -693,6 +896,7 @@ class _CodexPageState extends State<CodexPage>
           Tab(text: '使用计划'),
           Tab(text: '提醒中心'),
           Tab(text: '重置雷达'),
+          Tab(text: '消耗分析'),
           Tab(text: '提醒设置'),
         ],
       ),
@@ -705,6 +909,7 @@ class _CodexPageState extends State<CodexPage>
             ListView(children: [planTab(d, isStale)]),
             ListView(children: [remindersTab()]),
             ListView(children: [radarTab(d, overview)]),
+            ListView(children: [consumptionTab()]),
             ListView(children: [settingsTab()]),
           ],
         ),
