@@ -1,6 +1,6 @@
 {
   "name": "aihub-desktop",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "description": "AI Hub Codex quota companion",
   "homepage": "http://127.0.0.1:8080",
   "author": {
@@ -27,13 +27,24 @@
     },
     "files": [
       "**/*",
-      "!resources/bin/**"
+      "!resources/bin/**",
+      "!**/*.test.cjs",
+      "!mode-preference.json",
+      "!**/*.protected*",
+      "!**/*.env",
+      "!**/*.pem",
+      "!**/*.key",
+      "!**/*.pfx",
+      "!**/*.p12",
+      "!**/*.log"
     ],
     "extraResources": [
       {
         "from": "resources/bin",
         "to": "bin",
-        "filter": ["**/*"]
+        "filter": [
+          "**/*"
+        ]
       },
       {
         "from": "resources/bridge.example.json",
@@ -48,7 +59,9 @@
       "target": [
         {
           "target": "nsis",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ],
       "icon": "icon.ico"
@@ -57,11 +70,15 @@
       "target": [
         {
           "target": "AppImage",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         },
         {
           "target": "deb",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ],
       "icon": "icon.png",
@@ -79,11 +96,15 @@
       "target": [
         {
           "target": "dmg",
-          "arch": ["arm64"]
+          "arch": [
+            "arm64"
+          ]
         },
         {
           "target": "zip",
-          "arch": ["arm64"]
+          "arch": [
+            "arm64"
+          ]
         }
       ],
       "icon": "icon.icns",
@@ -100,8 +121,11 @@
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "AI Hub",
-      "installerLanguages": ["zh_CN", "en_US"],
-      "artifactName": "AIHub-Setup-${version}.${ext}",
+      "installerLanguages": [
+        "zh_CN",
+        "en_US"
+      ],
+      "artifactName": "AIHub-正式版v1.1.${ext}",
       "runAfterFinish": true
     }
   }
