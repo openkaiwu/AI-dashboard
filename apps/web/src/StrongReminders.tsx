@@ -1,7 +1,7 @@
 import {useEffect,useRef,useState} from 'react';
 import {request} from './api';
 import {scope} from './session';
-declare global {interface Window {aihubDesktop?:{alert:(value:{title:string;body:string;provider?:string})=>Promise<string>;openCodex:()=>Promise<void>;openDashboard?:()=>Promise<void>;sessionGet:(id:string)=>import('./session').Session|null;sessionSet:(id:string,value:import('./session').Session|null)=>boolean;extensionPairCode:()=>Promise<string>;configureServer:(url:string)=>Promise<string>}}}
+declare global {interface Window {aihubDesktop?:{alert:(value:{title:string;body:string;provider?:string})=>Promise<string>;openCodex:()=>Promise<void>;openDashboard?:()=>Promise<void>;sessionGet:(id:string)=>import('./session').Session|null;sessionSet:(id:string,value:import('./session').Session|null)=>boolean;installationID?:(previous:string|null)=>string;extensionPairCode:()=>Promise<string>;configureServer:(url:string)=>Promise<string>}}}
 import {eligibleStrong,type Alert} from './strongReminderPolicy';
 import {CODEX_POLL_MS} from './codexTiming';
 import {ActiveProvider,setActiveProvider} from './providerMode';

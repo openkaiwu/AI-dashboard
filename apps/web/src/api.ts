@@ -179,6 +179,7 @@ export const api = {
 
 function installationID(): string {
   let id = localStorage.getItem("hub_installation_id");
+  if(window.aihubDesktop?.installationID){id=window.aihubDesktop.installationID(id);localStorage.setItem("hub_installation_id",id);return id;}
   if (!id) { id = crypto.randomUUID(); localStorage.setItem("hub_installation_id", id); }
   return id;
 }

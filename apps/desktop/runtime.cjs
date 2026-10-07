@@ -5,11 +5,14 @@ const fs=require('node:fs');
 const https=require('node:https');
 const path=require('node:path');
 const platform=require('./platform.cjs');
+const credentialStore=require('./credentialStore.cjs');
+const secretCache=new Map();
 
 const LOCAL_ORIGIN='http://127.0.0.1:8080';
 const DEFAULT_CLOUD='http://127.0.0.1:8080';
 let lastError='';
 let managed={server:null,bridge:null};
+let bridgeSync=null;
 let cachedConfig=null;
 let activeMode=null;
 
@@ -17,8 +20,22 @@ function readJson(file){try{return JSON.parse(fs.readFileSync(file,'utf8'));}cat
 function dataDir(){return path.join(app.getPath('userData'),'runtime');}
 function ensureDataDir(){const dir=dataDir();fs.mkdirSync(dir,{recursive:true});return dir;}
 function secretPath(name){return path.join(ensureDataDir(),name+'.protected');}
-function readSecret(name){try{return safeStorage.decryptString(fs.readFileSync(secretPath(name)));}catch{return '';}}
-function writeSecret(name,value){if(!safeStorage.isEncryptionAvailable())throw Error('系统凭据保护不可用');fs.writeFileSync(secretPath(name),safeStorage.encryptString(value),{mode:0o600});}
+function readSecret(name){try{
+ const file=secretPath(name),stat=fs.statSync(file),stamp=stat.mtimeMs+':'+stat.size;
+ if(secretCache.get(name)?.stamp===stamp)return secretCache.get(name).value;
+ const value=credentialStore.decrypt(fs.readFileSync(file),safeStorage);
+ secretCache.set(name,{stamp,value});return value;
+}catch(error){
+ if(fs.existsSync(secretPath(name)))lastError='系统凭据读取失败，请重新登录以恢复连接';
+ if(process.env.AIHUB_STARTUP_DIAGNOSTICS==='1')console.error('credential_read_failed',name,error.message);
+ return '';
+}}
+function writeSecret(name,value){
+ const file=secretPath(name),temporary=file+'.tmp-'+crypto.randomUUID();
+ try{fs.writeFileSync(temporary,credentialStore.encrypt(value,safeStorage),{mode:0o600});fs.renameSync(temporary,file);}
+ finally{if(fs.existsSync(temporary))fs.unlinkSync(temporary);}
+ secretCache.delete(name);
+}
 function extensionPairCode(){let code=readSecret('extension-pair');if(!code){code=crypto.randomBytes(24).toString('hex');writeSecret('extension-pair',code)}return code;}
 function readDesktopSession(profileId){const all=readSecret('sessions');try{return JSON.parse(all||'{}')[profileId]||null;}catch{return null;}}
 function writeDesktopSession(profileId,session){let all={};try{all=JSON.parse(readSecret('sessions')||'{}');}catch{}if(session)all[profileId]=session;else delete all[profileId];writeSecret('sessions',JSON.stringify(all));}
@@ -54,6 +71,13 @@ function getUiOrigin(config=loadConfig(ensureDataDir())){
  return getActiveMode(config)==='local'?LOCAL_ORIGIN:(config.cloudServer||DEFAULT_CLOUD).replace(/\/$/,'');
 }
 function prefPath(){return path.join(ensureDataDir(),'mode-preference.json');}
+function installationID(previous){
+ const file=path.join(ensureDataDir(),'installation.json');
+ const saved=readJson(file);
+ if(typeof saved?.id==='string'&&saved.id.length>=16)return saved.id;
+ const id=typeof previous==='string'&&/^[a-f0-9-]{36}$/i.test(previous)?previous:crypto.randomUUID();
+ fs.writeFileSync(file,JSON.stringify({id}),{mode:0o600});return id;
+}
 function readModePreference(){return readJson(prefPath());}
 function clearModePreference(){try{fs.unlinkSync(prefPath());}catch{} resetMode();}
 function setUserMode(mode){
@@ -188,11 +212,18 @@ async function ensureBridge(dir,config){
  const bridgeExe=binPath('bridge');
  if(!fs.existsSync(bridgeExe))return;
  const stateFile=path.join(dir,'bridge-process.json');
+ const configHash=crypto.createHash('sha256').update(fs.readFileSync(cfgPath)).digest('hex');
  if(fs.existsSync(stateFile)){
-  try{const saved=JSON.parse(fs.readFileSync(stateFile,'utf8'));process.kill(saved.Id,0);return;}catch{fs.unlinkSync(stateFile);}
+  try{
+   const saved=JSON.parse(fs.readFileSync(stateFile,'utf8'));
+   process.kill(saved.Id,0);
+   if(saved.Binary===bridgeExe&&saved.ConfigHash===configHash)return;
+   if(managed.bridge?.pid===saved.Id)stopBridge();
+   else if(saved.Binary===bridgeExe){process.kill(saved.Id);fs.unlinkSync(stateFile);}
+  }catch{if(fs.existsSync(stateFile))fs.unlinkSync(stateFile);}
  }
  const child=spawnHidden(bridgeExe,['--config',cfgPath],dir,{AIHUB_BRIDGE_TOKEN:readSecret('bridge-token'),AIHUB_EXTENSION_PAIR_CODE:extensionPairCode()});
- fs.writeFileSync(stateFile,JSON.stringify({Id:child.pid,Binary:bridgeExe}));
+ fs.writeFileSync(stateFile,JSON.stringify({Id:child.pid,Binary:bridgeExe,ConfigHash:configHash}));
  managed.bridge=child;
  child.on('exit',(code)=>{if(managed.bridge===child){managed.bridge=null;try{fs.unlinkSync(stateFile);}catch{}} if(code)lastError=`Codex 采集器退出 (${code})`;});
 }
@@ -203,7 +234,7 @@ async function ensureReady(){
   const config=loadConfig(dir);
   await resolveActiveMode(dir,config);
   if(getActiveMode(config)==='local'){
-   await ensurePostgres(dir);
+   await platform.ensurePostgres(dir);
    await ensureServer(dir);
   }
   ensureBridgeConfig(dir,config);
@@ -212,11 +243,17 @@ async function ensureReady(){
   throw e;
  }
 }
-async function syncBridgeFromSession(webContents,config){
+function syncBridgeFromSession(webContents,config){
+ if(bridgeSync)return bridgeSync;
+ bridgeSync=syncBridgeSession(webContents,config).finally(()=>{bridgeSync=null;});
+ return bridgeSync;
+}
+async function syncBridgeSession(webContents,config){
  const dir=ensureDataDir();
  const picked=await webContents.executeJavaScript(`(()=>{try{const id=localStorage.getItem('hub_profile');const profiles=JSON.parse(localStorage.getItem('hub_profiles')||'[]');const profile=profiles.find(p=>p.id===id)||profiles[0]||{id:'default',url:location.origin};return {id:profile.id,server:profile.url};}catch{return null;}})()`,true);
  const session=picked?readDesktopSession(picked.id):null;
- if(!session?.token){stopBridge();return;}
+ if(process.env.AIHUB_STARTUP_DIAGNOSTICS==='1')console.error('startup_session',JSON.stringify({profile:picked?.id,hasSession:!!session,blocked:!!session?.blocked,electron:process.versions.electron}));
+ if(!session?.token||session.blocked){stopBridge();return;}
  const existing=readJson(path.join(dir,'bridge.json'));
  if(bridgeReady(existing)&&existing.server===picked.server&&existing.device_id===session.device_id){await ensureBridge(dir,config);return;}
  stopBridge();
@@ -243,4 +280,4 @@ function stopManaged(){
  }
 }
 function startupMessage(){return lastError||'';}
-module.exports={ensureReady,stopManaged,stopBridge,startupMessage,getUiOrigin,getActiveMode,setUserMode,setCloudServer,extensionPairCode,forceLocalMode,resetMode,clearModePreference,readModePreference,probeCloud,loadConfig,dataDir,readDesktopSession,writeDesktopSession,syncBridgeFromSession,LOCAL_ORIGIN,ORIGIN:LOCAL_ORIGIN,DEFAULT_CLOUD};
+module.exports={ensureReady,stopManaged,stopBridge,startupMessage,getUiOrigin,getActiveMode,setUserMode,setCloudServer,installationID,extensionPairCode,forceLocalMode,resetMode,clearModePreference,readModePreference,probeCloud,loadConfig,dataDir,readDesktopSession,writeDesktopSession,syncBridgeFromSession,LOCAL_ORIGIN,ORIGIN:LOCAL_ORIGIN,DEFAULT_CLOUD};

@@ -2,6 +2,7 @@ import {FormEvent,useEffect,useState} from "react";
 import {request} from "../api";
 import {friendlyError} from "../errors";
 import {saveSession} from "../session";
+import {loadAdminSections,inviteStatus} from "../adminData";
 type User={id:string;email:string;role:string;status:string;created_at:string};
 type Device={id:string;name:string;kind:string;revoked_at:string|null};
 type Connector={slug:string;bridges:number;last_receive:string|null};
@@ -16,12 +17,13 @@ export default function Admin(){
  const[regs,setRegs]=useState<Registration[]>([]),[invites,setInvites]=useState<Invite[]>([]),[newCode,setNewCode]=useState("");
 	const[inviteNote,setInviteNote]=useState(""),[inviteDays,setInviteDays]=useState(""),[inviteMaxUses,setInviteMaxUses]=useState(""),[inviteBusy,setInviteBusy]=useState(false);
 	const[radarInfo,setRadarInfo]=useState<{empty?:boolean;created_at?:string;note?:string}|null>(null),[radarToken,setRadarToken]=useState(""),[radarNote,setRadarNote]=useState(""),[radarBusy,setRadarBusy]=useState(false);
- async function reload(){try{const data=await request<{users:User[]}>("/api/v1/admin/users");setUsers(data.users);setError("");}catch(e){setError(friendlyError(e));}
-  try{setReport(await request<Report>("/api/v1/admin/telemetry"));}catch{}
-  try{setOps(await request<Operations>("/api/v1/admin/operations"));}catch{}
-  try{setRegs((await request<{registrations:Registration[]}>("/api/v1/admin/registrations")).registrations);}catch{}
-  try{setInvites((await request<{invites:Invite[]}>("/api/v1/admin/invites")).invites);}catch{}
-  try{setRadarInfo(await request<{empty?:boolean;created_at?:string;note?:string}>("/api/v1/admin/radar-token"));}catch{}
+ async function reload(){
+  const {data,errors}=await loadAdminSections(path=>request(path));
+  if(data.users)setUsers(data.users.users??[]);
+  setReport(data.report??null);setOps(data.ops??null);
+  setRegs(data.regs?.registrations??[]);setInvites(data.invites?.invites??[]);
+  setRadarInfo(data.radarInfo??null);
+  setError(errors.join("；"));
  }
  useEffect(()=>{void reload();},[]);
  async function create(e:FormEvent){e.preventDefault();setBusy(true);try{await request("/api/v1/admin/users",{method:"POST",body:JSON.stringify({email,password})});setEmail("");setPassword("");await reload();}catch(e){setError(friendlyError(e));}finally{setBusy(false);}}
@@ -48,7 +50,7 @@ export default function Admin(){
  {newCode&&<div className="device-card"><p><strong>新邀请码（仅显示这一次，请立即复制发给用户）：</strong></p><p><code>{newCode}</code></p><div className="actions"><button className="btn" onClick={()=>void navigator.clipboard?.writeText(newCode)}>复制</button><button className="btn ghost" onClick={()=>setNewCode("")}>关闭</button></div></div>}
  <form onSubmit={e=>void createInvite(e)}><label className="field"><span>备注（发给谁）</span><input maxLength={120} value={inviteNote} onChange={e=>setInviteNote(e.target.value)}/></label><label className="field"><span>有效天数（0 = 永不过期）</span><input type="number" min={0} max={365} value={inviteDays} onChange={e=>setInviteDays(e.target.value)}/></label><label className="field"><span>可用次数（1–100）</span><input type="number" min={1} max={100} value={inviteMaxUses} onChange={e=>setInviteMaxUses(e.target.value)}/></label><button className="btn" disabled={inviteBusy}>生成邀请码</button></form>
  {invites.length===0&&<p className="muted">尚未生成任何邀请码。</p>}
- {invites.map(v=><article className="device-card" key={v.id}><div><p className="muted">{v.note||"无备注"} · 已用 {v.use_count}/{v.max_uses} 次 · {v.expires_at?`过期于 ${new Date(v.expires_at).toLocaleString()}`:"永不过期"} · {v.status==='active'?(v.use_count>=v.max_uses?"已用完":"可用"):"已吊销"} · 生成于 {new Date(v.created_at).toLocaleString()}</p><div className="actions"><button className="btn ghost" disabled={v.status!=='active'&&v.use_count>=v.max_uses} onClick={()=>void toggleInvite(v)}>{v.status==='active'?'吊销':'恢复'}</button></div></div></article>)}
+ {invites.map(v=><article className="device-card" key={v.id}><div><p className="muted">{v.note||"无备注"} · 已用 {v.use_count}/{v.max_uses} 次 · {v.expires_at?`过期于 ${new Date(v.expires_at).toLocaleString()}`:"永不过期"} · {inviteStatus(v)} · 生成于 {new Date(v.created_at).toLocaleString()}</p><div className="actions"><button className="btn ghost" disabled={v.status!=='active'&&v.use_count>=v.max_uses} onClick={()=>void toggleInvite(v)}>{v.status==='active'?'吊销':'恢复'}</button></div></div></article>)}
  <h2>重置雷达令牌</h2>
  {radarToken&&<div className="device-card"><p><strong>新雷达令牌（仅显示这一次，请立即配置到自动化任务）：</strong></p><p><code>{radarToken}</code></p><div className="actions"><button className="btn" onClick={()=>void navigator.clipboard?.writeText(radarToken)}>复制</button><button className="btn ghost" onClick={()=>setRadarToken("")}>关闭</button></div></div>}
  <p className="muted">自动化任务携带该令牌调用 <code>POST /api/v1/radar/news</code>（body 为 codex-news.json 的内容），即可把检查结果直传为全员雷达，无需桌面端在线。吊销后立即失效。</p>

@@ -55,6 +55,7 @@ else {
   }
   ipcMain.handle('open-codex',async e=>{if(e.sender!==win.webContents||e.senderFrame!==win.webContents.mainFrame||!allowOrigin(e.senderFrame.url))throw Error('Unauthorized sender');await shell.openExternal('codex://');});
   ipcMain.on('session-get',(e,id)=>{if(e.sender!==win.webContents||e.senderFrame!==win.webContents.mainFrame||!allowOrigin(e.senderFrame.url)||typeof id!=='string'||id.length>128)return;e.returnValue=runtime.readDesktopSession(id);});
+  ipcMain.on('installation-id',(e,previous)=>{if(e.sender!==win.webContents||e.senderFrame!==win.webContents.mainFrame||!allowOrigin(e.senderFrame.url))return;e.returnValue=runtime.installationID(previous);});
   ipcMain.on('session-set',(e,id,value)=>{if(e.sender!==win.webContents||e.senderFrame!==win.webContents.mainFrame||!allowOrigin(e.senderFrame.url)||typeof id!=='string'||id.length>128)return;try{runtime.writeDesktopSession(id,value);e.returnValue=true;setImmediate(()=>void runtime.syncBridgeFromSession(win.webContents,runtime.loadConfig(runtime.dataDir())));}catch{e.returnValue=false;}});
   ipcMain.handle('configure-server',async(e,url)=>{
    if(e.sender!==win.webContents||e.senderFrame!==win.webContents.mainFrame||!e.senderFrame.url.startsWith('file:')||!decodeURIComponent(e.senderFrame.url).endsWith('/onboarding.html'))throw Error('Unauthorized sender');
@@ -80,9 +81,17 @@ else {
   async function openApp(){
    const config=runtime.loadConfig(runtime.dataDir());
    const origin=uiOrigin();
-   await win.loadURL(origin+'/');
+   // Network adapters and proxies may still be starting after Windows login.
+   // Keep the saved server and session while retrying transient navigation errors.
+   for(let attempt=0;;attempt++){
+    try{await win.loadURL(origin+'/codex');break;}
+    catch(err){
+     if(runtime.getActiveMode()!=='cloud'||attempt>=4)throw err;
+     await new Promise(resolve=>setTimeout(resolve,1000*2**attempt));
+    }
+   }
    await runtime.syncBridgeFromSession(win.webContents,config);
-   if(!(typeof process!=='undefined'&&process.argv.includes('--startup')))win.show();
+   win.show();
   }
   async function handleCloudFailure(err){
    const hint=runtime.startupMessage()||err?.message||String(err||'连接失败');
@@ -99,11 +108,11 @@ else {
   async function switchMode(){
    runtime.clearModePreference();
    runtime.stopManaged();
-   await start(true);
+   await start(false);
   }
   async function start(skipAsk=false){
    try{
-    await askMode(skipAsk);
+    if(!skipAsk)await askMode();
     const mode=runtime.getActiveMode();
     if(mode==='cloud'&&runtime.loadConfig(runtime.dataDir()).cloudServer===runtime.DEFAULT_CLOUD){await win.loadFile(path.join(__dirname,'onboarding.html'));win.show();return;}
     await runtime.ensureReady();
