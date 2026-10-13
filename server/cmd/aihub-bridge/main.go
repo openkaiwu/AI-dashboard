@@ -35,6 +35,16 @@ type config struct {
 	} `json:"official_api"`
 }
 
+const minimumCollectionIntervalSeconds = 60
+const legacyDefaultCollectionIntervalSeconds = 300
+
+func normalizedCollectionInterval(seconds int) int {
+	if seconds < minimumCollectionIntervalSeconds || seconds == legacyDefaultCollectionIntervalSeconds {
+		return minimumCollectionIntervalSeconds
+	}
+	return seconds
+}
+
 func validServer(raw string) bool {
 	u, e := url.Parse(raw)
 	return e == nil && u.Host != "" && u.User == nil && u.RawQuery == "" && u.Fragment == "" && (u.Path == "" || u.Path == "/") && (u.Scheme == "https" || (u.Scheme == "http" && (u.Hostname() == "127.0.0.1" || u.Hostname() == "localhost" || u.Hostname() == "::1")))
@@ -92,9 +102,7 @@ func run() error {
 	if !validServer(cfg.Server) || cfg.Token == "" {
 		return errors.New("invalid config: HTTPS server and bridge token required")
 	}
-	if cfg.IntervalSeconds < 300 {
-		cfg.IntervalSeconds = 300
-	}
+	cfg.IntervalSeconds = normalizedCollectionInterval(cfg.IntervalSeconds)
 	if len(cfg.ScanDirectories) > 8 {
 		cfg.ScanDirectories = cfg.ScanDirectories[:8]
 	}
@@ -110,6 +118,7 @@ func run() error {
 	if !*once { startExtensionBridge(ctx,client,cfg) }
 	next := map[string]time.Time{}
 	failures := map[string]int{}
+	codexMisses := 0
 	update := func(slug string, ok bool) {
 		if ok {
 			failures[slug] = 0
@@ -125,7 +134,7 @@ func run() error {
 
 	for {
 		if cfg.CodexPath != "" && filepath.IsAbs(cfg.CodexPath) && (*once || !time.Now().Before(next[provider.SlugCodex])) {
-			update(provider.SlugCodex, uploadCodex(ctx, client, cfg, *path, *once))
+			update(provider.SlugCodex, uploadCodex(ctx, client, cfg, *path, *once, &codexMisses))
 		}
 		if cursorEnabled(cfg) && (*once || !time.Now().Before(next[provider.SlugCursor])) {
 			update(provider.SlugCursor, uploadCursor(ctx, client, cfg, *path, *once))
@@ -149,13 +158,20 @@ func run() error {
 	}
 }
 
-func uploadCodex(ctx context.Context, client *http.Client, cfg config, configPath string, once bool) bool {
+func uploadCodex(ctx context.Context, client *http.Client, cfg config, configPath string, once bool, consecutiveMisses *int) bool {
 	sampleCtx, cancel := context.WithTimeout(ctx, 40*time.Second)
 	sample, e := codex.Collect(sampleCtx, cfg.CodexPath)
 	cancel()
 	if e != nil {
+		*consecutiveMisses++
+		if !once && *consecutiveMisses < 3 {
+			fmt.Println("Codex quota temporarily unavailable; retaining last successful sample and retrying next interval")
+			return true
+		}
 		sample = codex.Snapshot{ObservedAt: time.Now().UTC(), Source: "codex_app_server", Status: "unavailable", Buckets: []codex.Bucket{}}
 		fmt.Println("Codex quota unavailable; check desktop login and executable path")
+	} else {
+		*consecutiveMisses = 0
 	}
 	payload, _ := json.Marshal(sample)
 	if data, err := os.ReadFile(filepath.Join(filepath.Dir(configPath), "codex-news.json")); err == nil && len(data) < 32768 {

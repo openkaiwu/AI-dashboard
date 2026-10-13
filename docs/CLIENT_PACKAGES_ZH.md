@@ -1,4 +1,19 @@
-# 桌面版与 Android 原生 App
+# 全平台客户端
+
+当前统一版本为 **v1.1.4**（移动端构建号 8）。下载页为 `http://<服务器地址>:8888/`，账户登录使用自己的 HTTPS 工作台地址。下面旧版示例文件名仅供历史参考。
+
+| 平台 | 安装包 | 说明 |
+| --- | --- | --- |
+| Windows x64 | `AIHub-正式版v1.1.4.exe` | 未配置 Authenticode 签名 |
+| Android | `AIHub-正式版v1.1.4.apk` | 沿用现有调试签名 |
+| macOS Apple Silicon / Intel | `AIHub-1.1.4-arm64.dmg` / `AIHub-1.1.4-x64.dmg` | 无 Developer ID 签名与公证 |
+| Linux x64 / ARM64 | `AIHub-1.1.4-linux-<架构>.AppImage` / `.deb` | 内置同架构服务与采集器 |
+| iOS / iPadOS 15+ | `AIHub-1.1.4-unsigned.ipa` | 需要自行签名，不能直接安装 |
+| Web / PWA | 服务器 HTTPS 工作台 | Safari 可添加到主屏幕 |
+
+各平台共享浅色界面、提醒状态与便笺同步。iOS 当前没有 APNs 远程推送，也不能在退出应用后持续后台轮询。首次安装与原生通知仍需目标设备验收。
+
+macOS/Linux 桌面包由 `.github/workflows/release.yml` 在对应系统构建；发布前必须取得所有目标包、校验 SHA-256，并在服务器上验证完整下载。
 
 ## Windows 桌面版
 
@@ -37,17 +52,19 @@ Android App 使用 **Flutter 原生 UI**。源码中的 `https://hub.example.com
 
 ### 安装
 
-**公网下载（推荐）**：
+**公网下载**：最新下载页默认使用 `8888` 端口：
 
-- **HTTP 80**：http://203.0.113.10/downloads/aihub-mobile.apk
-- **HTTP 8888（备用）**：http://203.0.113.10:8888/downloads/aihub-mobile.apk
-- **HTTPS**：https://hub.example.com/downloads/aihub-mobile.apk（部分 Windows 因 IP 证书失败）
+- 下载页：`http://<服务器地址>:8888/`（直接打开最新版下载页）
+- Windows：`http://<服务器地址>:8888/downloads/AIHub-正式版v1.1.2.exe`
+- Android：`http://<服务器地址>:8888/downloads/AIHub-正式版v1.1.2.apk`
+- 电脑采集器：`http://<服务器地址>:8888/downloads/AIHub-Codex-Collector-Windows-latest.zip`
+- SHA-256：`http://<服务器地址>:8888/downloads/SHA256SUMS-latest.txt`
 
 若浏览器无法下载：
 1. 腾讯云 → 安全组 → 入站放行 **TCP 80、443、8888**（0.0.0.0/0）
-2. Clash 等代理将 `203.0.113.10` 设为 **DIRECT**，或暂时关闭 TUN
-3. 电脑端用 SSH 下载（不依赖 80 端口）：`powershell -File scripts/Download-Apk.ps1`
-4. 手机建议用 **4G/5G** 访问上述链接
+2. Clash 等代理将服务器地址设为 **DIRECT**，或暂时关闭 TUN
+3. 电脑端用 SSH 下载（不依赖 HTTP 端口）：`powershell -File scripts/Download-Apk.ps1`
+4. 手机建议用 **4G/5G** 访问上述 `8888` 链接
 
 历史 APK 曾包含编译期自动登录配置，已废弃且不可分发。使用脱敏源码重新构建的 APK 不再嵌入账号密码；登录时由用户输入。
 

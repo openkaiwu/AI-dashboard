@@ -65,7 +65,7 @@ func (s *Service) Consumption(w http.ResponseWriter, r *http.Request) {
 		plan = "unknown"
 	}
 	if granularity == "hourly" {
-		out, e := s.consumptionHourly(r.Context(), uid, now, r.URL.Query())
+		out, e := s.consumptionHourly(r.Context(), uid, now, r.URL.Query(), plan)
 		if e != nil {
 			httpx.Error(w, 503, "unavailable", "消耗数据暂不可用")
 			return
@@ -130,12 +130,12 @@ func (s *Service) Consumption(w http.ResponseWriter, r *http.Request) {
 	}
 	rows.Close()
 
-	// Window filter: '' keeps every reported window; "300"/"10080" keeps one.
+	// Apply plan visibility before aggregating; raw rollups remain available for plan changes.
 	windowFilter := r.URL.Query().Get("window")
-	if windowFilter != "" {
+	{
 		kept := hours[:0]
 		for _, h := range hours {
-			if strings.HasSuffix(h.key, ":"+windowFilter) {
+			if visibleConsumptionKey(h.key, windowFilter, plan) {
 				kept = append(kept, h)
 			}
 		}
@@ -150,7 +150,7 @@ func (s *Service) Consumption(w http.ResponseWriter, r *http.Request) {
 			off := (int(local.Weekday()) + 6) % 7 // Monday as the week start
 			return local.AddDate(0, 0, -off).Format("2006-01-02")
 		case "monthly":
-			return local.Format("2006-01")
+			return local.Format("2006-01") + "-01"
 		default:
 			return local.Format("2006-01-02")
 		}
@@ -212,7 +212,7 @@ func (s *Service) Consumption(w http.ResponseWriter, r *http.Request) {
 	// Window capability from the newest snapshot among the account's bridges.
 	var latestRaw []byte
 	_ = s.DB.QueryRowContext(r.Context(), `SELECT snapshot FROM codex_bridges WHERE user_id=$1 AND revoked_at IS NULL ORDER BY received_at DESC LIMIT 1`, uid).Scan(&latestRaw)
-	windows := windowCapability(latestRaw)
+	windows := windowCapability(latestRaw, plan)
 
 	daysWithData := 0
 	for _, e := range series {
@@ -300,7 +300,7 @@ func (s *Service) consumptionWindow(ctx context.Context, uid string, now time.Ti
 				if w == nil {
 					continue
 				}
-				if windowFilter != "" && windowKey(b, w) != b.ID+":"+windowFilter {
+				if !visibleConsumptionKey(windowKey(b, w), windowFilter, plan) {
 					continue
 				}
 				var resetsAt *int64
@@ -330,11 +330,11 @@ func (s *Service) consumptionWindow(ctx context.Context, uid string, now time.Ti
 		}
 		outGens = append(outGens, consumptionGeneration{ResetsAt: g.ResetsAt, Start: g.Start.Format(time.RFC3339), End: g.End.Format(time.RFC3339), Points: g.Points})
 	}
-	return map[string]any{"generated_at": now, "windows": windowCapability(latest), "generations": outGens, "plan_type": plan}, nil
+	return map[string]any{"generated_at": now, "windows": windowCapability(latest, plan), "generations": outGens, "plan_type": plan}, nil
 }
 
 // windowCapability reports which window durations the newest snapshot carried.
-func windowCapability(latest []byte) []consumptionWindow {
+func windowCapability(latest []byte, plan string) []consumptionWindow {
 	present := map[int64]bool{}
 	if len(latest) > 0 {
 		var snap codex.Snapshot
@@ -350,6 +350,9 @@ func windowCapability(latest []byte) []consumptionWindow {
 	}
 	out := []consumptionWindow{}
 	for _, d := range []int64{300, 10080} {
+		if !codex.WindowVisibleForPlan(plan, d) {
+			continue
+		}
 		out = append(out, consumptionWindow{ID: "codex", DurationMinutes: d, Present: present[d]})
 	}
 	return out
@@ -514,9 +517,15 @@ func nextBucket(t time.Time, loc *time.Location, granularity string) time.Time {
 	}
 }
 
+// visibleConsumptionKey applies the same policy to raw and rolled-up windows.
+func visibleConsumptionKey(key, filter, plan string) bool {
+	return (codex.WindowVisibleForPlan(plan, 300) || !strings.HasSuffix(key, ":300")) &&
+		(filter == "" || strings.HasSuffix(key, ":"+filter))
+}
+
 // consumptionHourly returns the per-hour consumed series from the rollup,
 // optionally filtered to one window duration.
-func (s *Service) consumptionHourly(ctx context.Context, uid string, now time.Time, qp url.Values) (map[string]any, error) {
+func (s *Service) consumptionHourly(ctx context.Context, uid string, now time.Time, qp url.Values, plan string) (map[string]any, error) {
 	hours := 24
 	if v := qp.Get("hours"); v != "" {
 		if n, e := strconv.Atoi(v); e == nil && n >= 1 && n <= 168 {
@@ -541,7 +550,7 @@ func (s *Service) consumptionHourly(ctx context.Context, uid string, now time.Ti
 		if e = rows.Scan(&hour, &key, &consumed, &samples, &resets); e != nil {
 			return nil, e
 		}
-		if windowFilter != "" && !strings.HasSuffix(key, ":"+windowFilter) {
+		if !visibleConsumptionKey(key, windowFilter, plan) {
 			continue
 		}
 		hourly = append(hourly, map[string]any{"hour": hour.Format(time.RFC3339), "consumed_pp": consumed, "samples": samples, "resets": resets})

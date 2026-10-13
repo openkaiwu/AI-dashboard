@@ -1,1 +1,1 @@
-{"name":"AI Hub 工作空间","short_name":"AI Hub","start_url":"/","display":"standalone","background_color":"#ffffff","theme_color":"#ffffff","icons":[{"src":"/icon.svg","sizes":"any","type":"image/svg+xml","purpose":"any"}]}
+{"id":"/","name":"AI Hub 工作空间","short_name":"AI Hub","start_url":"/","scope":"/","display":"standalone","background_color":"#ffffff","theme_color":"#ffffff","icons":[{"src":"/icon.svg","sizes":"any","type":"image/svg+xml","purpose":"any"},{"src":"/apple-touch-icon.png","sizes":"256x256","type":"image/png","purpose":"any"}]}

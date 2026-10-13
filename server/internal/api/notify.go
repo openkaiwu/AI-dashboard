@@ -272,7 +272,8 @@ func (s *Server) writePreview(w http.ResponseWriter, r *http.Request, rule notif
 func (s *Server) listNotifications(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.db.QueryContext(r.Context(), `SELECT n.id, n.rule_id, n.provider_account_id, n.quota_bucket_id, n.title, n.body, n.severity, n.dedupe_key,
 		CASE WHEN n.status='snoozed' AND n.snoozed_until<=now() THEN 'unread' ELSE n.status END, n.created_at,
-		COALESCE(p.slug, ''), COALESCE(p.display_name, '')
+		COALESCE(p.slug, ''), COALESCE(p.display_name, ''),
+		(n.rule_id IS NULL OR EXISTS (SELECT 1 FROM alert_states st WHERE st.user_id=n.user_id AND st.notification_id=n.id))
 		FROM notifications n
 		LEFT JOIN provider_accounts a ON a.id = n.provider_account_id
 		LEFT JOIN providers p ON p.id = a.provider_id
@@ -286,7 +287,8 @@ func (s *Server) listNotifications(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var id, title, body, sev, key, status, created, providerSlug, providerName string
 		var ruleID, acct, bucket sql.NullString
-		if err := rows.Scan(&id, &ruleID, &acct, &bucket, &title, &body, &sev, &key, &status, &created, &providerSlug, &providerName); err != nil {
+		var active bool
+		if err := rows.Scan(&id, &ruleID, &acct, &bucket, &title, &body, &sev, &key, &status, &created, &providerSlug, &providerName, &active); err != nil {
 			httpx.Error(w, http.StatusInternalServerError, "internal", "读取通知失败")
 			return
 		}
@@ -302,6 +304,7 @@ func (s *Server) listNotifications(w http.ResponseWriter, r *http.Request) {
 			"severity":            sev,
 			"dedupe_key":          key,
 			"status":              status,
+			"active":              active,
 			"created_at":          created,
 		})
 	}

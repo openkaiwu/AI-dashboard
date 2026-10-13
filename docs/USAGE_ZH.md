@@ -145,7 +145,7 @@ curl -s -X POST https://你的服务器/api/v1/radar/news \
 | `device_id` | 绑定的电脑设备 ID |
 | `codex_path` | Codex 可执行文件绝对路径（留空则自动发现） |
 | `cursor_enabled` | 是否同时采集 Cursor |
-| `interval_seconds` | 采集周期，默认 300 |
+| `interval_seconds` | 采集周期，默认 60 秒；旧版默认值 300 会在新版采集器中自动迁移为 60 秒 |
 
 ### 5.3 客户端默认
 

@@ -16,8 +16,10 @@ import 'codex_page.dart';
 import 'cursor_page.dart';
 import 'inbox_page.dart';
 import 'theme.dart';
+import 'workspace_chrome.dart';
 import 'manual_account.dart';
 import 'strong_reminder_ui.dart';
+import 'reminder_policy.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -228,74 +230,171 @@ class _HubHomeState extends State<HubHome> with WidgetsBindingObserver {
     if (mounted && api == current) setState(() => modeStatus = next);
   }
 
-  Future<void> handleReminderAction(String id, String action) async {
-    if (action == 'open') {
-      await pollStrongNotifications();
-      return;
-    }
-    if (action != 'read' && action != 'snooze' && action != 'dismiss') return;
-    try {
-      await api?.call(
-          'POST',
-          '/api/v1/notifications/${Uri.encodeComponent(id)}/action',
-          {'action': action});
-      final scope = api?.session == null
-          ? null
-          : '${selected?['url']}|${api!.session!['user']['id']}|${api!.session!['device_id']}';
-      if (scope != null && action != 'snooze') {
-        await vault.write(key: 'strong-seen:$scope:$id', value: id);
-      }
-    } catch (_) {}
+  String? reminderScope(HubApi? current) => current?.session == null
+      ? null
+      : '${selected?['url']}|${current!.session!['user']['id']}|${current.session!['device_id']}';
+
+  Future<void> reminderAction(HubApi current, String id, String action) async {
+    final codex = id.startsWith('codex:');
+    final serverId = codex ? Uri.decodeComponent(id.substring(6)) : id;
+    final path = codex
+        ? '/api/v1/codex/alerts/${Uri.encodeComponent(serverId)}'
+        : '/api/v1/notifications/${Uri.encodeComponent(serverId)}/action';
+    await current.call('POST', path, {'action': action});
+    await LocalNotifications.cancelReminder(id);
   }
 
-  Future<void> pollStrongNotifications() async {
-    if (api?.session == null || !mounted || reminderPopupOpen) return;
+  Future<void> handleReminderAction(String id, String action) async {
+    final current = api;
+    final scope = reminderScope(current);
+    if (current == null || scope == null) return;
+    final seenKey = 'strong-seen:$scope:$id';
+    if (action == 'open') {
+      await pollStrongNotifications(requestedId: id);
+      return;
+    }
+    if (!['read', 'snooze', 'dismiss'].contains(action)) return;
     try {
-      final data = await api!.call('GET', '/api/v1/notifications');
-      final items = List<Json>.from(data['notifications'] as List? ?? []);
-      final next = items.cast<Json?>().firstWhere(
-            (n) =>
-                n != null &&
-                n['status'] == 'unread' &&
-                (n['severity'] == 'warning' || n['severity'] == 'critical'),
-            orElse: () => null,
-          );
-      if (next == null || !mounted) return;
+      await reminderAction(current, id, action);
+      if (action == 'snooze' && !id.startsWith('codex:')) {
+        await vault.delete(key: seenKey);
+      }
+    } catch (_) {
+      if (mounted) setState(() => error = '提醒操作未保存，请在提醒中心重试。');
+    }
+  }
+
+  Future<void> pollStrongNotifications({String? requestedId}) async {
+    final current = api;
+    final scope = reminderScope(current);
+    if (current == null || scope == null || !mounted || reminderPopupOpen) {
+      return;
+    }
+    reminderPopupOpen = true;
+    try {
+      Future<Json> genericNotifications() async {
+        try {
+          return await current.call('GET', '/api/v1/notifications');
+        } catch (_) {
+          return {'notifications': <Json>[]};
+        }
+      }
+
+      final responses = await Future.wait([
+        current.call('GET', '/api/v1/codex/overview'),
+        genericNotifications(),
+      ]);
+      if (!mounted || api != current) return;
+      final candidates = ReminderPolicy.candidates(
+          responses[0],
+          List<Json>.from(responses[1]['notifications'] as List? ?? []),
+          DateTime.now());
+      Json? next;
+      for (final candidate in candidates) {
+        if (requestedId != null && candidate['id'] != requestedId) continue;
+        final delivered =
+            await vault.read(key: 'strong-seen:$scope:${candidate['id']}');
+        if (requestedId != null || delivered != candidate['_token']) {
+          next = candidate;
+          break;
+        }
+      }
+      if (!mounted || api != current) return;
+      if (next == null) {
+        if (requestedId != null) {
+          setState(() => error = '这条提醒已处理、已失效或处于免打扰，请在提醒中心查看。');
+        }
+        return;
+      }
       final id = next['id'] as String;
-      final scope =
-          '${selected!['url']}|${api!.session!['user']['id']}|${api!.session!['device_id']}';
+      final token = next['_token'] as String;
       final seenKey = 'strong-seen:$scope:$id';
-      if (await vault.read(key: seenKey) != null) return;
+      final cadenceKey =
+          'reminder-cadence:${selected?['url']}|${current.session!['user']['id']}';
+      Json? last;
+      try {
+        last = jsonDecode(await vault.read(key: cadenceKey) ?? 'null') as Json?;
+      } catch (_) {}
+      final priority = next['_priority'] as num;
+      if (requestedId == null &&
+          !ReminderPolicy.canInterrupt(last, priority, DateTime.now())) {
+        return;
+      }
+      final isCodex = id.startsWith('codex:');
+      final serverId = isCodex ? Uri.decodeComponent(id.substring(6)) : id;
+      final deliveryPath =
+          '/api/v1/codex/alerts/${Uri.encodeComponent(serverId)}/delivery';
+      String? claim;
+      if (isCodex && requestedId == null) {
+        final result = await current
+            .call('POST', deliveryPath, {'action': 'claim', 'token': token});
+        if (result['claimed'] != true) return;
+        claim = result['claim_id'] as String;
+      }
+      Future<void> receipt(String action) async {
+        if (claim == null) return;
+        try {
+          await current.call(
+              'POST', deliveryPath, {'action': action, 'claim_id': claim});
+        } catch (_) {}
+      }
+
+      Future<void> recordCadence() async {
+        try {
+          await vault.write(
+              key: cadenceKey,
+              value: jsonEncode({
+                'at': DateTime.now().millisecondsSinceEpoch,
+                'priority': priority
+              }));
+        } catch (_) {}
+      }
+
+      if (!mounted) {
+        await receipt('release');
+        return;
+      }
+      if (api != current || reminderScope(current) != scope) {
+        await receipt('release');
+        return;
+      }
       final foreground =
           WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed;
       if (!foreground) {
-        final postedKey = 'strong-posted:$scope:$id';
-        if (await vault.read(key: postedKey) != null) return;
-        await LocalNotifications.showReminder(
-          id: id,
-          title: StrongReminderCopy.notificationTitle(next),
-          body: StrongReminderCopy.notificationBody(next),
-        );
-        await vault.write(key: postedKey, value: id);
+        final posted = await LocalNotifications.showReminder(
+            id: id,
+            title: StrongReminderCopy.notificationTitle(next),
+            body: StrongReminderCopy.notificationBody(next));
+        if (posted) {
+          await receipt('delivered');
+          await recordCadence();
+          await vault.write(key: seenKey, value: token);
+        } else {
+          await receipt('release');
+        }
         return;
       }
-      final slug = next['provider_slug'] as String?;
-      if (slug == 'cursor' || slug == 'codex') await switchUiMode(slug!);
-      if (!mounted) return;
-      reminderPopupOpen = true;
-      final action = await showDialog<String>(
-        context: context,
-        barrierDismissible: false,
-        builder: (ctx) => StrongReminderDialog(notification: next),
-      );
-      reminderPopupOpen = false;
-      if (!mounted || action == null) return;
-      await api!.call(
-          'POST',
-          '/api/v1/notifications/${Uri.encodeComponent(id)}/action',
-          {'action': action});
-      if (action != 'snooze') await vault.write(key: seenKey, value: id);
+      final showing = showDialog<String>(
+          context: context,
+          barrierDismissible: false,
+          builder: (ctx) => StrongReminderDialog(notification: next!));
+      await receipt('delivered');
+      await recordCadence();
+      await vault.write(key: seenKey, value: token);
+      final action = await showing;
+      if (!mounted ||
+          api != current ||
+          reminderScope(current) != scope ||
+          action == null) {
+        return;
+      }
+      await reminderAction(current, id, action);
+      if (!isCodex && action == 'snooze') {
+        await vault.delete(key: seenKey);
+      }
     } catch (_) {
+      // Keep delivery markers after display; only unsent events may retry.
+    } finally {
       reminderPopupOpen = false;
     }
   }
@@ -921,6 +1020,10 @@ class _HubHomeState extends State<HubHome> with WidgetsBindingObserver {
               '${selected!['url']}|${api!.session!['user']['id']}|${api!.session!['device_id']}|$manualRevision'),
           api: api!,
           store: store!,
+          onConnections: () {
+            setState(() => tab = 3);
+            unawaited(loadDevices());
+          },
           scope:
               '${selected!['url']}|${api!.session!['user']['id']}|${api!.session!['device_id']}',
         ),
@@ -933,34 +1036,12 @@ class _HubHomeState extends State<HubHome> with WidgetsBindingObserver {
   @override
   Widget build(BuildContext context) => Scaffold(
         appBar: AppBar(
-          title: Row(children: [
-            Container(
-              width: 32,
-              height: 32,
-              decoration: BoxDecoration(
-                color: HubTheme.accent,
-                borderRadius: BorderRadius.circular(10),
-              ),
-              alignment: Alignment.center,
-              child: const Text('↗',
-                  style: TextStyle(color: Colors.white, fontSize: 18)),
-            ),
-            const SizedBox(width: 10),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text('AI Hub', style: TextStyle(fontSize: 16)),
-                Text(
-                    uiMode == 'cursor'
-                        ? 'Cursor 额度助手'
-                        : uiMode == 'codex'
-                            ? 'Codex 使用助手'
-                            : '选择工作模式',
-                    style:
-                        const TextStyle(fontSize: 11, color: HubTheme.muted)),
-              ],
-            ),
-          ]),
+          title: HubBrand(
+              subtitle: uiMode == 'cursor'
+                  ? 'Cursor 工作空间'
+                  : uiMode == 'codex'
+                      ? 'Codex 工作空间'
+                      : '选择工作模式'),
           actions: [
             if (engine != null && tab == 0 && uiMode != 'choose')
               IconButton(
@@ -980,16 +1061,27 @@ class _HubHomeState extends State<HubHome> with WidgetsBindingObserver {
                 ],
                 child: Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 8),
-                  child: Text(uiMode == 'cursor' ? 'Cursor' : 'Codex',
-                      style: Theme.of(context).textTheme.labelLarge),
+                  child: Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                    decoration: BoxDecoration(
+                        color: HubTheme.bg2,
+                        borderRadius: BorderRadius.circular(9)),
+                    child: Row(mainAxisSize: MainAxisSize.min, children: [
+                      Text(
+                          uiMode == 'cursor'
+                              ? 'Cursor'
+                              : uiMode == 'codex'
+                                  ? 'Codex'
+                                  : '模式',
+                          style: const TextStyle(
+                              fontSize: 12, fontWeight: FontWeight.w600)),
+                      const SizedBox(width: 3),
+                      const Icon(Icons.expand_more, size: 16),
+                    ]),
+                  ),
                 ),
               ),
-            if (selected != null)
-              Padding(
-                  padding: const EdgeInsets.only(right: 16),
-                  child: Center(
-                      child: Text(selected!['name'],
-                          style: Theme.of(context).textTheme.labelSmall))),
           ],
         ),
         body: store == null
@@ -1019,25 +1111,16 @@ class _HubHomeState extends State<HubHome> with WidgetsBindingObserver {
                       ],
                     ),
                   ),
-                Expanded(child: pageBody()),
+                Expanded(
+                    child:
+                        SafeArea(top: false, bottom: false, child: pageBody())),
               ]),
-        bottomNavigationBar: NavigationBar(
-            selectedIndex: tab,
-            onDestinationSelected: (v) {
-              setState(() => tab = v);
-              if (v == 3 && engine != null) unawaited(loadDevices());
-            },
-            destinations: const [
-              NavigationDestination(
-                  icon: Icon(Icons.analytics_outlined), label: '额度'),
-              NavigationDestination(
-                  icon: Icon(Icons.notifications_outlined), label: '通知'),
-              NavigationDestination(
-                  icon: Icon(Icons.notes_outlined), label: '便笺'),
-              NavigationDestination(
-                  icon: Icon(Icons.devices_outlined), label: '设备'),
-              NavigationDestination(
-                  icon: Icon(Icons.dns_outlined), label: '服务器'),
-            ]),
+        bottomNavigationBar: HubNavigationBar(
+          selectedIndex: tab,
+          onSelected: (v) {
+            setState(() => tab = v);
+            if (v == 3 && engine != null) unawaited(loadDevices());
+          },
+        ),
       );
 }

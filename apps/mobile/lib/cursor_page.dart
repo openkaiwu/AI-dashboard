@@ -23,7 +23,7 @@ class _CursorPageState extends State<CursorPage> {
     super.initState();
     unawaited(refresh());
     timer =
-        Timer.periodic(const Duration(minutes: 5), (_) => unawaited(refresh()));
+        Timer.periodic(const Duration(minutes: 1), (_) => unawaited(refresh()));
   }
 
   @override
@@ -267,13 +267,17 @@ class _CursorPageState extends State<CursorPage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Text('Cursor 使用助手',
-              style: Theme.of(context).textTheme.headlineMedium),
+          Text('Cursor 工作台', style: Theme.of(context).textTheme.headlineMedium),
           const SizedBox(height: 5),
-          const Text('额度、计划、提醒、雷达和设置'),
+          const Text('实际用量与重置时间，一眼掌握。'),
           if (error != null)
             Text(error!, style: const TextStyle(color: HubTheme.warn)),
-          TextButton(onPressed: busy ? null : refresh, child: const Text('刷新')),
+          Align(
+              alignment: Alignment.centerRight,
+              child: TextButton.icon(
+                  onPressed: busy ? null : refresh,
+                  icon: const Icon(Icons.refresh_rounded, size: 17),
+                  label: const Text('刷新'))),
           const TabBar(isScrollable: true, tabs: [
             Tab(text: '额度总览'),
             Tab(text: '使用计划'),

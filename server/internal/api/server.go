@@ -16,8 +16,8 @@ import (
 	"aihub.dev/server/internal/auth"
 	"aihub.dev/server/internal/clock"
 	"aihub.dev/server/internal/config"
-	"aihub.dev/server/internal/conversation"
 	"aihub.dev/server/internal/connector"
+	"aihub.dev/server/internal/conversation"
 	"aihub.dev/server/internal/httpx"
 	"aihub.dev/server/internal/promotion"
 	"aihub.dev/server/internal/provider"
@@ -58,6 +58,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("PUT /api/v1/codex/plan", authService.Middleware(bridgeService.Plan))
 	mux.Handle("PATCH /api/v1/codex/preferences", authService.Middleware(bridgeService.Preferences))
 	mux.Handle("POST /api/v1/codex/alerts/{id}", authService.Middleware(bridgeService.AlertAction))
+	mux.Handle("POST /api/v1/codex/alerts/{id}/delivery", authService.Middleware(bridgeService.Delivery))
 	mux.Handle("GET /api/v1/codex/bridges", authService.Middleware(bridgeService.List))
 	mux.Handle("POST /api/v1/codex/bridges", authService.Middleware(bridgeService.Create))
 	mux.Handle("DELETE /api/v1/codex/bridges/{id}", authService.Middleware(bridgeService.Revoke))

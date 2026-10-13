@@ -14,7 +14,15 @@ import (
 
 func (s *Service) Preferences(w http.ResponseWriter, r *http.Request) {
 	var p codex.Preferences
-	if httpx.Decode(r, &p) != nil || !p.Valid() {
+	if httpx.Decode(r, &p) != nil {
+		httpx.Error(w, 400, "invalid_preferences", "规则参数格式不正确")
+		return
+	}
+	if p.SparePercent <= p.LowPercent {
+		httpx.Error(w, 400, "invalid_preferences", "多用提醒的剩余阈值必须高于低额度阈值")
+		return
+	}
+	if !p.Valid() {
 		httpx.Error(w, 400, "invalid_preferences", "规则参数不在允许范围内")
 		return
 	}
@@ -30,11 +38,16 @@ func (s *Service) AlertAction(w http.ResponseWriter, r *http.Request) {
 	var q struct {
 		Action string `json:"action"`
 	}
-	if httpx.Decode(r, &q) != nil || (q.Action != "dismiss" && q.Action != "snooze" && q.Action != "restore") {
+	if httpx.Decode(r, &q) != nil || (q.Action != "read" && q.Action != "dismiss" && q.Action != "snooze" && q.Action != "restore") {
 		httpx.Error(w, 400, "invalid_action", "无效操作")
 		return
 	}
-	result, e := s.DB.ExecContext(r.Context(), `UPDATE codex_alerts SET notified_at=CASE WHEN $3='snooze' THEN now()-interval '2 days' ELSE notified_at END,dismissed=CASE WHEN $3='dismiss' THEN true WHEN $3='restore' THEN false ELSE dismissed END,snoozed_until=CASE WHEN $3='snooze' THEN now()+interval '1 hour' WHEN $3='restore' THEN NULL ELSE snoozed_until END WHERE user_id=$1 AND id=$2`, auth.Who(r).UserID, r.PathValue("id"), q.Action)
+	result, e := s.DB.ExecContext(r.Context(), `UPDATE codex_alerts SET
+		read_at=CASE WHEN $3='read' THEN now() ELSE NULL END,
+		notified_at=CASE WHEN $3 IN ('snooze','restore') THEN NULL ELSE notified_at END,
+		dismissed=($3='dismiss'),
+		snoozed_until=CASE WHEN $3='snooze' THEN now()+interval '1 hour' ELSE NULL END
+		WHERE user_id=$1 AND id=$2 AND active`, auth.Who(r).UserID, r.PathValue("id"), q.Action)
 	if e != nil {
 		httpx.Error(w, 503, "unavailable", "操作失败")
 		return
@@ -144,12 +157,21 @@ func (s *Service) Evaluate(ctx context.Context, uid string, now time.Time) (map[
 		reports = append(reports, map[string]any{"id": d.ID, "name": d.Name, "snapshot": d.Snapshot, "analysis": a, "history": history})
 		if p.Enabled {
 			for _, v := range a.Advice {
+				if v.Kind == "slow" || v.Kind == "use" {
+					v.SourceName = d.Name
+				}
 				key := d.ID + ":" + v.Key
 				if v.Kind == "credit" || v.Kind == "news" {
 					key = v.Key
 				}
 				payload, _ := json.Marshal(v)
-				_, e = tx.ExecContext(ctx, `INSERT INTO codex_alerts(user_id,id,payload,first_seen,last_seen,notified_at) VALUES($1,$2,$3,$4,$4,$4) ON CONFLICT(user_id,id) DO UPDATE SET payload=excluded.payload,active=true,last_seen=excluded.last_seen,notified_at=CASE WHEN NOT codex_alerts.dismissed AND (codex_alerts.snoozed_until IS NULL OR codex_alerts.snoozed_until<=$4) AND codex_alerts.notified_at<=$5 AND NOT $6 AND $7 THEN $4 ELSE codex_alerts.notified_at END`, uid, key, payload, now, now.Add(-time.Duration(p.CooldownHours)*time.Hour), p.Quiet(now), v.Kind != "news")
+				_, e = tx.ExecContext(ctx, `INSERT INTO codex_alerts(user_id,id,payload,first_seen,last_seen,notified_at)
+					VALUES($1,$2,$3,$4,$4,CASE WHEN NOT $5 AND $6 THEN $4::timestamptz ELSE NULL END)
+					ON CONFLICT(user_id,id) DO UPDATE SET payload=excluded.payload,active=true,last_seen=excluded.last_seen,
+					notified_at=CASE WHEN NOT codex_alerts.dismissed AND codex_alerts.read_at IS NULL
+					AND (codex_alerts.snoozed_until IS NULL OR codex_alerts.snoozed_until<=$4)
+					AND codex_alerts.notified_at IS NULL
+					AND NOT $5 AND $6 THEN $4 ELSE codex_alerts.notified_at END`, uid, key, payload, now, p.Quiet(now), v.Interrupt)
 				if e != nil {
 					return nil, e
 				}
@@ -157,18 +179,19 @@ func (s *Service) Evaluate(ctx context.Context, uid string, now time.Time) (map[
 		}
 	}
 	alerts := []map[string]any{}
-	rows, e = tx.QueryContext(ctx, `SELECT id,payload,first_seen,notified_at,dismissed,snoozed_until FROM codex_alerts WHERE user_id=$1 AND active ORDER BY first_seen DESC LIMIT 100`, uid)
+	rows, e = tx.QueryContext(ctx, `SELECT id,payload,first_seen,notified_at,dismissed,snoozed_until,read_at FROM codex_alerts WHERE user_id=$1 AND active ORDER BY first_seen DESC LIMIT 100`, uid)
 	if e != nil {
 		return nil, e
 	}
 	for rows.Next() {
 		var id string
 		var raw []byte
-		var first, notified time.Time
+		var first time.Time
+		var notified, read sql.NullTime
 		var dismissed bool
 		var snooze sql.NullTime
 		var payload any
-		if e = rows.Scan(&id, &raw, &first, &notified, &dismissed, &snooze); e != nil {
+		if e = rows.Scan(&id, &raw, &first, &notified, &dismissed, &snooze, &read); e != nil {
 			rows.Close()
 			return nil, e
 		}
@@ -180,7 +203,14 @@ func (s *Service) Evaluate(ctx context.Context, uid string, now time.Time) (map[
 		if snooze.Valid {
 			until = snooze.Time
 		}
-		alerts = append(alerts, map[string]any{"id": id, "advice": payload, "first_seen": first, "notified_at": notified, "dismissed": dismissed, "snoozed_until": until})
+		var notifiedAt, readAt any
+		if notified.Valid {
+			notifiedAt = notified.Time
+		}
+		if read.Valid {
+			readAt = read.Time
+		}
+		alerts = append(alerts, map[string]any{"id": id, "advice": payload, "first_seen": first, "notified_at": notifiedAt, "read_at": readAt, "dismissed": dismissed, "snoozed_until": until})
 	}
 	e = rows.Err()
 	rows.Close()

@@ -66,6 +66,25 @@ func TestRateStopsAtCounterDecrease(t *testing.T) {
 		t.Fatal("10 minute sample should not estimate")
 	}
 }
+
+func TestAdviceSafetyAndEscalation(t *testing.T) {
+	now := time.Date(2026, 10, 8, 4, 0, 0, 0, time.UTC)
+	p := Defaults()
+	s := sample(now, 20, 12)
+	s.Buckets[0].Secondary = &Window{UsedPercent: 5, DurationMinutes: 300}
+	if a := Analyze(s, nil, p, now); a.State != "unknown" || len(a.Advice) != 0 {
+		t.Fatal("missing secondary reset must suppress boost", a)
+	}
+	low := Analyze(sample(now, 95, 12), nil, p, now)
+	exhausted := Analyze(sample(now, 100, 12), nil, p, now)
+	if low.Advice[0].Priority != 3 || exhausted.Advice[0].Priority != 4 || low.Advice[0].Key == exhausted.Advice[0].Key {
+		t.Fatal("exhaustion must be a new higher-priority event", low, exhausted)
+	}
+	p.SparePercent = p.LowPercent
+	if p.Valid() {
+		t.Fatal("conflicting low and spare thresholds accepted")
+	}
+}
 func TestCreditPrivacyExpiryAndQuiet(t *testing.T) {
 	now := time.Now().UTC()
 	expiry := now.Add(time.Hour).Unix()
@@ -89,5 +108,61 @@ func TestCreditPrivacyExpiryAndQuiet(t *testing.T) {
 	p := Defaults()
 	if !p.Quiet(time.Date(2026, 9, 22, 16, 0, 0, 0, time.UTC)) || p.Quiet(time.Date(2026, 9, 22, 4, 0, 0, 0, time.UTC)) {
 		t.Fatal("quiet hours timezone")
+	}
+}
+
+func TestAdviceConfirmationAndShortReset(t *testing.T) {
+	now := time.Date(2026, 10, 8, 4, 0, 0, 0, time.UTC)
+	p := Defaults()
+	for _, tc := range []struct {
+		name       string
+		used, left float64
+		interrupt  bool
+	}{
+		{"budget ahead without trend", 75, 120, false},
+		{"low with reset in ten minutes", 95, 1.0 / 6, false},
+		{"exhausted even before imminent reset", 100, 1.0 / 6, true},
+		{"low with enough wait", 95, 2, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a := Analyze(sample(now, tc.used, tc.left), nil, p, now)
+			if len(a.Advice) != 1 || a.Advice[0].Interrupt != tc.interrupt {
+				t.Fatal(a)
+			}
+		})
+	}
+	s := sample(now, 70, 120)
+	h := []Snapshot{}
+	for i, used := range []float64{30, 40, 50, 60} {
+		v := sample(now, used, 120)
+		v.ObservedAt = now.Add(time.Duration(i-4) * 5 * time.Minute)
+		h = append(h, v)
+	}
+	if a := Analyze(s, h, p, now); !a.Advice[0].Interrupt {
+		t.Fatal("sustained risk not confirmed", a)
+	}
+	burst := sample(now, 70, 120)
+	flat := []Snapshot{}
+	for i := 0; i < 4; i++ {
+		v := sample(now, 30, 120)
+		v.ObservedAt = now.Add(time.Duration(i-4) * 5 * time.Minute)
+		flat = append(flat, v)
+	}
+	if a := Analyze(burst, flat, p, now); a.Advice[0].Interrupt {
+		t.Fatal("single burst interrupted", a)
+	}
+	gap := []Snapshot{h[0]}
+	if a := Analyze(s, gap, p, now); a.Metrics[0].Rate != nil {
+		t.Fatal("collection outage bridged by rate", a)
+	}
+	if remainingText(0.04) == "0%" || resetText(1.0/60) != "1 分钟" {
+		t.Fatal("small remainder or reset rounded away")
+	}
+	credit := sample(now, 20, 100)
+	expires := now.Add(5 * time.Minute).Unix()
+	credit.ResetCredits = &ResetCredits{AvailableCount: 1, Items: []ResetCredit{{ID: "safe", ExpiresAt: &expires}}}
+	a := Analyze(credit, nil, p, now)
+	if len(a.Advice) != 1 || a.Advice[0].Priority != 5 || !a.Advice[0].Interrupt {
+		t.Fatal("final expiry must bypass normal spacing", a)
 	}
 }

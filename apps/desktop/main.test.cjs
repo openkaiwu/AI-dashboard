@@ -12,7 +12,7 @@ test('native bridge validates sender, serializes dialogs and maps safe actions',
  const {loginItemSupportedFor}=require('./platform.cjs');
  const loginItemCalls=[];
  const runtime={ensureReady:async()=>{},stopManaged(){},startupMessage(){return ''},getUiOrigin:()=>'http://127.0.0.1:8080',getActiveMode:()=>'local',setUserMode(){},forceLocalMode(){},resetMode(){},clearModePreference(){},readModePreference:()=>null,probeCloud:async()=>true,loadConfig:()=>({uiMode:'local',profileId:'local-default',profileName:'本地'}),dataDir:()=>'',injectWebSession:async()=>false,syncBridgeFromSession:async()=>{},DEFAULT_CLOUD:'https://hub.example.com',ORIGIN:'http://127.0.0.1:8080'};
- const electron={app:{requestSingleInstanceLock:()=>true,on(){},whenReady:()=>Promise.resolve(),setAppUserModelId(){},setLoginItemSettings(settings){loginItemCalls.push(settings);},commandLine:{appendSwitch(){}}},BrowserWindow:Window,Tray:class{setToolTip(){}setContextMenu(){}on(){}},Menu:{buildFromTemplate:x=>x},nativeImage:{createFromPath:()=>({})},ipcMain:{handle:(k,v)=>handlers[k]=v,on:(k,v)=>handlers[k]=v},dialog:{showMessageBox:async()=>{openCount++;return {response:answer};}},shell:{openExternal:async url=>{assert.equal(url,'codex://');}}};
+ const electron={app:{requestSingleInstanceLock:()=>true,on(){},whenReady:()=>Promise.resolve(),setAppUserModelId(){},setLoginItemSettings(settings){loginItemCalls.push(settings);},commandLine:{appendSwitch(){}}},BrowserWindow:Window,Tray:class{setToolTip(){}setContextMenu(){}on(){}},Menu:{buildFromTemplate:x=>x},nativeImage:{createFromPath:()=>({resize:()=>({})})},ipcMain:{handle:(k,v)=>handlers[k]=v,on:(k,v)=>handlers[k]=v},dialog:{showMessageBox:async()=>{openCount++;return {response:answer};}},shell:{openExternal:async url=>{assert.equal(url,'codex://');}}};
  vm.runInNewContext(fs.readFileSync(__dirname+'/main.cjs','utf8'),{require:name=>name==='electron'?electron:name==='./runtime.cjs'?runtime:require(name),__dirname,URL,setInterval:()=>({unref(){}}),setImmediate});
  await new Promise(r=>setImmediate(r));
  if(loginItemSupportedFor(process.platform)){
@@ -31,7 +31,7 @@ test('native bridge validates sender, serializes dialogs and maps safe actions',
  answer=2;assert.equal(await handlers['quota-alert'](e,{title:'quota',body:'warning'}),'dismiss');
  assert.equal(await handlers['quota-alert'](e,{title:'x'.repeat(201),body:'warning'}),'retry');
  assert.equal(openCount,2);
- answer=3;assert.equal(await handlers['quota-alert'](e,{title:'quota',body:'warning'}),'read');
+ answer=3;assert.equal(await handlers['quota-alert'](e,{title:'quota',body:'warning',provider:'Codex'}),'read');
  let release;electron.dialog.showMessageBox=()=>new Promise(r=>{release=r;});
  const pending=handlers['quota-alert'](e,{title:'quota',body:'warning'});
  assert.equal(await handlers['quota-alert'](e,{title:'another',body:'warning'}),'retry');

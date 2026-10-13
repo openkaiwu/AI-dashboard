@@ -159,6 +159,13 @@ function guidedSetupError(sqlFile){
 	return err;
 }
 
+// CREATE DATABASE cannot run in a DO block or a transaction. psql's gexec
+// executes the conditional statement as a separate top-level command.
+function databaseSetupSql(password){
+	if(!/^[a-f0-9]{48}$/.test(password))throw new Error('Invalid generated database password');
+	return `DO $$ BEGIN CREATE ROLE aihub_m0 LOGIN PASSWORD '${password}'; EXCEPTION WHEN duplicate_object THEN NULL; END $$;\nSELECT 'CREATE DATABASE aihub_m0 OWNER aihub_m0' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'aihub_m0')\\gexec\n`;
+}
+
 // Creates role + database for the local server and returns the database URL.
 // Windows boots psql inside WSL (legacy behaviour); macOS talks to Homebrew
 // PostgreSQL directly as the current superuser; Linux cannot elevate from a
@@ -169,10 +176,10 @@ async function ensureDatabase(dir){
 	if(fs.existsSync(envFile))return readEnvFile(envFile);
 	const password=crypto.randomBytes(24).toString('hex');
 	const url=`postgres://aihub_m0:${password}@127.0.0.1:5432/aihub_m0?sslmode=disable`;
-	const sqlPlain=`DO $$ BEGIN CREATE ROLE aihub_m0 LOGIN PASSWORD '${password}'; EXCEPTION WHEN duplicate_object THEN NULL; END $$; DO $$ BEGIN CREATE DATABASE aihub_m0 OWNER aihub_m0; EXCEPTION WHEN duplicate_database THEN NULL; END $$;`;
+	const sqlPlain=databaseSetupSql(password);
+	const sqlFile=path.join(dir,'aihub-setup.sql');
+	fs.writeFileSync(sqlFile,sqlPlain,{mode:0o600});
 	if(IS_LINUX){
-		const sqlFile=path.join(dir,'aihub-setup.sql');
-		fs.writeFileSync(sqlFile,sqlPlain+'\n',{mode:0o600});
 		fs.writeFileSync(envFile,`export AIHUB_DATABASE_URL="${url}"\n`,{mode:0o600});
 		throw guidedSetupError(sqlFile);
 	}
@@ -180,11 +187,11 @@ async function ensureDatabase(dir){
 		const brew=darwinBrewPath();
 		const pg=brew?await darwinPostgresPrefix(brew):null;
 		if(!pg)throw new Error('未检测到 PostgreSQL。请在终端执行：\n  brew install postgresql@16\n然后从托盘菜单选择「重新连接」。');
-		try{await execFileAsync(path.join(pg.prefix,'bin','psql'),['-v','ON_ERROR_STOP=1','postgres','-c',sqlPlain]);}
+		try{await execFileAsync(path.join(pg.prefix,'bin','psql'),['-v','ON_ERROR_STOP=1','postgres','-f',sqlFile]);}
 		catch(e){throw new Error('数据库初始化失败：'+e.message+'\n请确认 PostgreSQL 已启动（brew services start postgresql@'+pg.version+'）。');}
 	}else{
-		const sqlShell=sqlPlain.split('$$').join('\\$\\$');
-		await execWsl(`(command -v runuser >/dev/null && runuser -u postgres -- psql -v ON_ERROR_STOP=1 -c "${sqlShell}") || sudo -u postgres psql -v ON_ERROR_STOP=1 -c "${sqlShell}"`);
+		const encoded=Buffer.from(sqlPlain).toString('base64');
+		await execWsl(`printf '%s' '${encoded}' | base64 -d | { if [ "$(id -u)" = 0 ]; then runuser -u postgres -- psql -v ON_ERROR_STOP=1 postgres; else sudo -u postgres psql -v ON_ERROR_STOP=1 postgres; fi; }`);
 	}
 	fs.writeFileSync(envFile,`export AIHUB_DATABASE_URL="${url}"\n`,{mode:0o600});
 	return url;
@@ -214,7 +221,7 @@ function localModeHelp(){
 
 module.exports={
 	PLATFORM,IS_WIN,IS_MAC,IS_LINUX,
-	binNames,loginItemSupportedFor,appUserModelIdSupportedFor,codexSearchRoots,
+	binNames,loginItemSupportedFor,appUserModelIdSupportedFor,codexSearchRoots,databaseSetupSql,
 	loginItemSupported:()=>loginItemSupportedFor(PLATFORM),
 	appUserModelIdSupported:()=>appUserModelIdSupportedFor(PLATFORM),
 	findCodex,tcpReachable,ensurePostgres,ensureDatabase,serverStartupHint,

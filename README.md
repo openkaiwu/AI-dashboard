@@ -32,7 +32,7 @@
 - **设备与账户**：独立设备授权/撤销、access/refresh 轮换、审计。
 - **服务器配置**：可切换自部署服务器，外网强制 HTTPS。
 - **现有额度功能**：手工登记、在线额度看板、提醒规则、通知、历史记录。
-- **客户端**：可运行 Web/PWA；Flutter Android/Windows/Linux 源码及 Drift 核心测试。
+- **客户端**：Web/PWA、Electron Windows/macOS/Linux 与 Flutter Android/iOS；统一 v1.1.4，签名与安装说明见 [客户端文档](docs/CLIENT_PACKAGES_ZH.md)。
 - **部署**：Windows/Linux 服务端单二进制（已内嵌 Web），PostgreSQL；可选 Docker + Caddy。
 
 M0 增量事件流同步的是便笺；Codex 自动采集作为后续增量，使用独立快照接口。其他 Provider 自动采集、额度领域离线事件同步、手机后台通知及多人协作仍属后续阶段。

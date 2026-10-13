@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { request } from "../api";
 import { profile, scope } from "../session";
-import { CODEX_POLL_MS, CODEX_STALE_MS } from "../codexTiming";
+import { CODEX_COLLECTION_INTERVAL_SECONDS, CODEX_POLL_MS, CODEX_STALE_MS } from "../codexTiming";
 
 type Bridge = {
   id: string;
@@ -84,7 +84,7 @@ export default function CursorConnections() {
 
   function download() {
     const blob = new Blob(
-      [JSON.stringify({ server: profile().url, token, codex_path: "", cursor_enabled: true, interval_seconds: 300 }, null, 2)],
+      [JSON.stringify({ server: profile().url, token, codex_path: "", cursor_enabled: true, interval_seconds: CODEX_COLLECTION_INTERVAL_SECONDS }, null, 2)],
       { type: "application/json" }
     );
     const url = URL.createObjectURL(blob);
@@ -119,8 +119,8 @@ export default function CursorConnections() {
       </div>
       <div className="sync-banner">
         <span className={"status-dot" + (error ? " offline" : "")} />
-        <strong>{error ? "离线缓存" : "每 5 分钟同步"}</strong>
-        <span>与 Codex 共用 bridge.json · 超过 11 分钟标为过期</span>
+        <strong>{error ? "离线缓存" : "每分钟同步"}</strong>
+        <span>与 Codex 共用 bridge.json · 连续 3 分钟无新数据标为过期</span>
       </div>
       {error && (
         <p role="status" className="error">

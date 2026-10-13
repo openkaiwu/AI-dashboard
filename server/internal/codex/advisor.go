@@ -13,7 +13,7 @@ type Preferences struct {
 	LowPercent    float64 `json:"low_percent"`
 	PaceLead      float64 `json:"pace_lead"`
 	CreditHours   float64 `json:"credit_hours"`
-	CooldownHours int     `json:"cooldown_hours"`
+	CooldownHours int     `json:"cooldown_hours"` // Legacy API compatibility; events no longer repeat on a timer.
 	QuietStart    int     `json:"quiet_start"`
 	QuietEnd      int     `json:"quiet_end"`
 	UTCOffset     int     `json:"utc_offset_minutes"`
@@ -21,6 +21,9 @@ type Preferences struct {
 
 func Defaults() Preferences { return Preferences{true, 24, 35, 15, 20, 24, 6, 23, 8, 480} }
 func (p Preferences) Valid() bool {
+	if p.SparePercent <= p.LowPercent {
+		return false
+	}
 	return p.NearHours >= 1 && p.NearHours <= 168 && p.SparePercent >= 10 && p.SparePercent <= 95 && p.LowPercent >= 1 && p.LowPercent <= 30 && p.PaceLead >= 5 && p.PaceLead <= 70 && p.CreditHours >= 1 && p.CreditHours <= 168 && p.CooldownHours >= 1 && p.CooldownHours <= 48 && p.QuietStart >= 0 && p.QuietStart <= 23 && p.QuietEnd >= 0 && p.QuietEnd <= 23 && p.UTCOffset >= -720 && p.UTCOffset <= 840
 }
 func (p Preferences) Quiet(now time.Time) bool {
@@ -35,11 +38,14 @@ func (p Preferences) Quiet(now time.Time) bool {
 }
 
 type Advice struct {
-	Key      string `json:"key"`
-	Kind     string `json:"kind"`
-	Title    string `json:"title"`
-	Body     string `json:"body"`
-	Priority int    `json:"priority"`
+	Key        string `json:"key"`
+	Kind       string `json:"kind"`
+	Title      string `json:"title"`
+	Body       string `json:"body"`
+	Priority   int    `json:"priority"`
+	Reason     string `json:"reason"`
+	Interrupt  bool   `json:"interrupt"`
+	SourceName string `json:"source_name,omitempty"`
 }
 type Metric struct {
 	Bucket       string   `json:"bucket"`
@@ -76,13 +82,21 @@ func matching(s Snapshot, id string, slot int) *Window {
 func recentRate(s Snapshot, h []Snapshot, id string, slot int, w *Window) *float64 {
 	var oldest *Snapshot
 	lastUsed := w.UsedPercent
+	lastTime := s.ObservedAt
+	samples := 1
 	for i := len(h) - 1; i >= 0; i-- {
 		v := &h[i]
 		age := s.ObservedAt.Sub(v.ObservedAt)
 		if age <= 0 {
 			continue
 		}
-		if age > 6*time.Hour {
+		if age > time.Hour {
+			break
+		}
+		if lastTime.Sub(v.ObservedAt) <= 0 {
+			continue
+		}
+		if lastTime.Sub(v.ObservedAt) > 11*time.Minute {
 			break
 		}
 		old := matching(*v, id, slot)
@@ -91,12 +105,61 @@ func recentRate(s Snapshot, h []Snapshot, id string, slot int, w *Window) *float
 		}
 		oldest = v
 		lastUsed = old.UsedPercent
+		lastTime = v.ObservedAt
+		samples++
 	}
-	if oldest == nil || s.ObservedAt.Sub(oldest.ObservedAt) < 15*time.Minute {
+	if oldest == nil || samples < 3 || s.ObservedAt.Sub(oldest.ObservedAt) < 15*time.Minute {
 		return nil
 	}
 	old := matching(*oldest, id, slot)
 	return ptr((w.UsedPercent - old.UsedPercent) / s.ObservedAt.Sub(oldest.ObservedAt).Hours())
+}
+
+// A forecast must also have been risky at a previous collection, rather than
+// turning a single burst or a resumed connection into an urgent message.
+func sustainedRisk(s Snapshot, history []Snapshot, id string, slot int, w *Window, p Preferences) bool {
+	for i := len(history) - 1; i >= 0; i-- {
+		prev := history[i]
+		gap := s.ObservedAt.Sub(prev.ObservedAt)
+		if gap < 5*time.Minute {
+			continue
+		}
+		if gap > 11*time.Minute || prev.Status != "ok" {
+			return false
+		}
+		old := matching(prev, id, slot)
+		if old == nil || old.ResetsAt == nil || w.ResetsAt == nil || *old.ResetsAt != *w.ResetsAt || old.DurationMinutes != w.DurationMinutes || old.UsedPercent > w.UsedPercent {
+			return false
+		}
+		rate := recentRate(prev, history[:i], id, slot, old)
+		hours := time.Unix(*old.ResetsAt, 0).Sub(prev.ObservedAt).Hours()
+		if rate == nil || *rate <= 0 || hours <= 0 {
+			return false
+		}
+		expected := math.Max(0, 100*(1-hours/(float64(old.DurationMinutes)/60)))
+		return old.UsedPercent-expected >= p.PaceLead || (100-old.UsedPercent) / *rate < hours*0.7
+	}
+	return false
+}
+
+func remainingText(v float64) string {
+	if v > 0 && v < 0.1 {
+		return "不足 0.1%"
+	}
+	if v > 0 && v < 1 {
+		return fmt.Sprintf("%.1f%%", v)
+	}
+	return fmt.Sprintf("%.0f%%", v)
+}
+
+func resetText(hours float64) string {
+	if hours < 1 {
+		return fmt.Sprintf("%d 分钟", int(math.Ceil(hours*60)))
+	}
+	if hours >= 24 {
+		return fmt.Sprintf("%.1f 天", hours/24)
+	}
+	return fmt.Sprintf("%.1f 小时", hours)
 }
 func Analyze(s Snapshot, history []Snapshot, p Preferences, now time.Time) Analysis {
 	out := Analysis{State: "balanced", Metrics: []Metric{}, Advice: []Advice{}}
@@ -107,12 +170,14 @@ func Analyze(s Snapshot, history []Snapshot, p Preferences, now time.Time) Analy
 	boosts := []Advice{}
 	slows := []Advice{}
 	blocked := false
+	windows := 0
 	knownResets := 0
 	for _, b := range s.Buckets {
 		for slot, w := range []*Window{b.Primary, b.Secondary} {
 			if w == nil {
 				continue
 			}
+			windows++
 			m := Metric{Bucket: b.ID, Slot: []string{"primary", "secondary"}[slot], Remaining: 100 - w.UsedPercent, Reset: w.ResetsAt, Duration: w.DurationMinutes}
 			if m.Remaining <= p.LowPercent {
 				blocked = true
@@ -131,14 +196,41 @@ func Analyze(s Snapshot, history []Snapshot, p Preferences, now time.Time) Analy
 					}
 					near := math.Min(p.NearHours, float64(w.DurationMinutes)/60*0.2)
 					key := fmt.Sprintf("%s:%d:%d", b.ID, slot, *w.ResetsAt)
+					window := fmt.Sprintf("%s · %.0f 小时窗口", b.ID, float64(w.DurationMinutes)/60)
+					if w.DurationMinutes%1440 == 0 {
+						window = fmt.Sprintf("%s · %d 天窗口", b.ID, w.DurationMinutes/1440)
+					}
 					if m.Remaining <= p.LowPercent || (hours > near && (w.UsedPercent-expected >= p.PaceLead || (m.Runway != nil && *m.Runway < hours*0.7))) {
-						body := fmt.Sprintf("%s 剩余 %.0f%%，距重置 %.1f 小时。当前已用 %.0f%%，均匀使用参考为 %.0f%%。", b.ID, m.Remaining, hours, w.UsedPercent, expected)
-						if m.Runway != nil {
-							body += fmt.Sprintf("按近 6 小时内的观测速度，约 %.1f 小时后耗尽；这是估计，不是承诺。", *m.Runway)
+						title, reason, priority := "本周期额度使用偏多", "已用比例超出均匀时间进度，可预留后续任务额度；这不代表当前仍在快速消耗。", 2
+						code, interrupt := "pace_ahead", false
+						if m.Remaining <= 0 {
+							title, reason, priority = "当前窗口额度已用完", "请等待重置，并在 Codex 中确认可用额度。", 4
+							key += ":exhausted"
+							code, interrupt = "quota_exhausted", true
+						} else if m.Remaining <= p.LowPercent {
+							title, reason, priority = "剩余额度偏低，优先处理重要任务", "预留后续任务所需额度。", 3
+							key += ":low"
+							code, interrupt = "quota_low", hours > 0.25
+							if !interrupt {
+								title, reason = "额度偏低，即将重置", "重置已临近，按需完成当前工作并等待新周期确认。"
+							}
+						} else if m.Runway != nil && *m.Runway < hours*0.7 {
+							reason = fmt.Sprintf("按近期观测速度，预计约 %.1f 小时后用完，可能早于重置。建议降低消耗；预测仅作参考。", *m.Runway)
+							code = "runway_short"
 						}
-						slows = append(slows, Advice{key + ":slow", "slow", "放慢一点，给后续任务留额度", body, 2})
+						if code == "pace_ahead" || code == "runway_short" {
+							interrupt = m.Rate != nil && *m.Rate > 0 && sustainedRisk(s, history, b.ID, slot, w, p)
+							if interrupt {
+								title = "持续消耗偏快，建议放慢"
+								key += ":sustained"
+							} else {
+								reason += " 暂作为页面建议，等待连续观测确认。"
+							}
+						}
+						body := fmt.Sprintf("%s 剩余 %s，约 %s 后重置。%s", window, remainingText(m.Remaining), resetText(hours), reason)
+						slows = append(slows, Advice{Key: key + ":slow", Kind: "slow", Title: title, Body: body, Priority: priority, Reason: code, Interrupt: interrupt})
 					} else if hours <= near && m.Remaining >= p.SparePercent {
-						boosts = append(boosts, Advice{key + ":use", "use", "快重置了，可以多安排一些任务", fmt.Sprintf("%s 还有 %.0f%%，约 %.1f 小时后重置。可以优先处理已计划的代码审查、测试或整理任务。", b.ID, m.Remaining, hours), 1})
+						boosts = append(boosts, Advice{Key: key + ":use", Kind: "use", Title: "临近重置，可安排计划中的任务", Body: fmt.Sprintf("%s 剩余 %s，约 %s 后重置。其他已知窗口未见额度紧张，可按需提前安排任务。", window, remainingText(m.Remaining), resetText(hours)), Priority: 1, Reason: "reset_surplus"})
 					}
 				}
 			}
@@ -148,7 +240,7 @@ func Analyze(s Snapshot, history []Snapshot, p Preferences, now time.Time) Analy
 	if len(slows) > 0 {
 		out.State = "slow"
 		out.Advice = append(out.Advice, slows...)
-	} else if !blocked && len(boosts) > 0 {
+	} else if !blocked && knownResets == windows && len(boosts) > 0 {
 		out.State = "use"
 		out.Advice = append(out.Advice, boosts...)
 	}
@@ -159,18 +251,25 @@ func Analyze(s Snapshot, history []Snapshot, p Preferences, now time.Time) Analy
 			}
 			hours := time.Unix(*item.ExpiresAt, 0).Sub(now).Hours()
 			if hours > 0 && hours <= p.CreditHours {
-				out.Advice = append(out.Advice, Advice{"credit:" + item.ID, "credit", "重置卡快到期了", fmt.Sprintf("一张可用重置卡约 %.1f 小时后到期。请在 Codex 检查兑换条件，安排任务并在到期前手动使用；不会自动消耗重置卡。", hours), 3})
+				priority, key := 3, "credit:"+item.ID
+				if hours <= 1 {
+					priority, key = 4, key+":urgent"
+				}
+				if hours <= 1.0/6 {
+					priority, key = 5, "credit:"+item.ID+":last-chance"
+				}
+				out.Advice = append(out.Advice, Advice{Key: key, Kind: "credit", Title: "重置卡快到期了", Body: fmt.Sprintf("一张可用重置卡约 %s 后到期。请在 Codex 检查兑换条件，并在到期前按需手动使用。", resetText(hours)), Priority: priority, Reason: "credit_expiry", Interrupt: true})
 			}
 		}
 	}
 	if n := s.News; n != nil && n.Status == "checked" && now.Sub(n.CheckedAt) < NewsFreshFor {
 		for _, item := range n.Items {
 			if now.Sub(item.PublishedAt) <= 72*time.Hour {
-				out.Advice = append(out.Advice, Advice{"news:" + item.URL, "news", "Tibo 发布了重置相关消息", item.Summary + " 这不代表你的账户已重置，请以本机额度为准。", 1})
+				out.Advice = append(out.Advice, Advice{Key: "news:" + item.URL, Kind: "news", Title: "Tibo 发布了重置相关消息", Body: item.Summary + " 这不代表你的账户已重置，请以本机额度为准。", Priority: 1, Reason: "external_news"})
 			}
 		}
 	}
-	if len(out.Metrics) == 0 || knownResets == 0 {
+	if len(slows) == 0 && (windows == 0 || knownResets < windows) {
 		out.State = "unknown"
 	}
 	return out

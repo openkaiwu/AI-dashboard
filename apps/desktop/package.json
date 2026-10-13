@@ -1,6 +1,6 @@
 {
   "name": "aihub-desktop",
-  "version": "1.1.0",
+  "version": "1.1.4",
   "description": "AI Hub Codex quota companion",
   "homepage": "http://127.0.0.1:8080",
   "author": {
@@ -71,13 +71,15 @@
         {
           "target": "AppImage",
           "arch": [
-            "x64"
+            "x64",
+            "arm64"
           ]
         },
         {
           "target": "deb",
           "arch": [
-            "x64"
+            "x64",
+            "arm64"
           ]
         }
       ],
@@ -86,10 +88,10 @@
       "artifactName": "AIHub-${version}-${arch}.${ext}"
     },
     "appImage": {
-      "artifactName": "AIHub-${version}-x86_64.AppImage"
+      "artifactName": "AIHub-${version}-linux-${arch}.AppImage"
     },
     "deb": {
-      "artifactName": "AIHub-${version}-amd64.deb",
+      "artifactName": "AIHub-${version}-linux-${arch}.deb",
       "category": "Utility"
     },
     "mac": {
@@ -97,13 +99,15 @@
         {
           "target": "dmg",
           "arch": [
-            "arm64"
+            "arm64",
+            "x64"
           ]
         },
         {
           "target": "zip",
           "arch": [
-            "arm64"
+            "arm64",
+            "x64"
           ]
         }
       ],
@@ -113,7 +117,7 @@
       "artifactName": "AIHub-${version}-${arch}.${ext}"
     },
     "dmg": {
-      "artifactName": "AIHub-${version}-arm64.dmg"
+      "artifactName": "AIHub-${version}-${arch}.dmg"
     },
     "nsis": {
       "oneClick": false,
@@ -125,7 +129,7 @@
         "zh_CN",
         "en_US"
       ],
-      "artifactName": "AIHub-正式版v1.1.${ext}",
+      "artifactName": "AIHub-正式版v${version}.${ext}",
       "runAfterFinish": true
     }
   }

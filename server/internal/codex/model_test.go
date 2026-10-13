@@ -1,38 +1,53 @@
 package codex
 
 import (
+	"reflect"
 	"testing"
 	"time"
 )
 
-func TestForPlanKeepsFiveHourWindowsForIdentifiedPlans(t *testing.T) {
-	s := Snapshot{ObservedAt: time.Now().UTC(), Source: "codex_app_server", Status: "ok", Buckets: []Bucket{{
-		ID:        "b1",
-		Primary:   &Window{UsedPercent: 40, DurationMinutes: 300},
-		Secondary: &Window{UsedPercent: 10, DurationMinutes: 10080},
-	}}}
-	for _, plan := range []string{"plus", "pro", "prolite"} {
-		got := s.ForPlan(plan)
-		if len(got.Buckets) != 1 || got.Buckets[0].Primary == nil || got.Buckets[0].Primary.DurationMinutes != 300 {
-			t.Fatalf("plan %s: five-hour window must be preserved, got %+v", plan, got.Buckets)
+func TestForPlanQuotaVisibility(t *testing.T) {
+	for _, secondary := range []bool{false, true} {
+		five := &Window{UsedPercent: 98, DurationMinutes: 300}
+		week := &Window{UsedPercent: 10, DurationMinutes: 10080}
+		bucket := Bucket{ID: "codex", Primary: five, Secondary: week}
+		if secondary {
+			bucket.Primary, bucket.Secondary = week, five
 		}
-		if got.Buckets[0].Secondary == nil {
-			t.Fatalf("plan %s: weekly window must be preserved", plan)
+		snapshot := Snapshot{ObservedAt: time.Now().UTC(), Source: "codex_app_server", Status: "ok", Buckets: []Bucket{bucket, {ID: "five-only", Primary: five}}}
+		for _, plan := range []string{"plus", "pro", "prolite", "unknown"} {
+			filtered := snapshot.ForPlan(plan)
+			durations := []int64{}
+			for _, b := range filtered.Buckets {
+				for _, w := range []*Window{b.Primary, b.Secondary} {
+					if w != nil {
+						durations = append(durations, w.DurationMinutes)
+					}
+				}
+			}
+			if plan == "plus" {
+				if !reflect.DeepEqual(filtered, snapshot) {
+					t.Fatalf("Plus data changed: %+v", filtered)
+				}
+			} else if !reflect.DeepEqual(durations, []int64{10080}) || len(filtered.Buckets) != 1 {
+				t.Fatalf("%s: unexpected windows %+v", plan, filtered.Buckets)
+			}
+			if snapshot.Buckets[0] != bucket || snapshot.Buckets[1].Primary != five {
+				t.Fatal("raw snapshot mutated")
+			}
 		}
 	}
 }
 
-func TestForPlanHidesFiveHourWindowsForUnknownPlan(t *testing.T) {
-	s := Snapshot{ObservedAt: time.Now().UTC(), Source: "codex_app_server", Status: "ok", Buckets: []Bucket{{
-		ID:        "b1",
-		Primary:   &Window{UsedPercent: 40, DurationMinutes: 300},
-		Secondary: &Window{UsedPercent: 10, DurationMinutes: 10080},
-	}}}
-	got := s.ForPlan("unknown")
-	if len(got.Buckets) != 1 || got.Buckets[0].Primary != nil {
-		t.Fatalf("unknown plan: five-hour window must be hidden, got %+v", got.Buckets)
+func TestPlanFilteringPreventsHiddenFiveHourAdvice(t *testing.T) {
+	now := time.Now().UTC()
+	snapshot := sample(now, 30, 100)
+	reset := now.Add(2 * time.Hour).Unix()
+	snapshot.Buckets[0].Secondary = &Window{UsedPercent: 98, DurationMinutes: 300, ResetsAt: &reset}
+	if a := Analyze(snapshot.ForPlan("plus"), nil, Defaults(), now); a.State != "slow" || len(a.Metrics) != 2 {
+		t.Fatalf("Plus should retain five-hour risk: %+v", a)
 	}
-	if got.Buckets[0].Secondary == nil || got.Buckets[0].Secondary.DurationMinutes != 10080 {
-		t.Fatalf("unknown plan: weekly window must survive, got %+v", got.Buckets)
+	if a := Analyze(snapshot.ForPlan("pro"), nil, Defaults(), now); a.State != "balanced" || len(a.Metrics) != 1 || len(a.Advice) != 0 {
+		t.Fatalf("Pro received hidden-window advice: %+v", a)
 	}
 }

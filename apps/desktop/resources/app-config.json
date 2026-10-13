@@ -3,5 +3,5 @@
   "cloudServer": "http://127.0.0.1:8080",
   "profileId": "public-cloud",
   "profileName": "公网 AI Hub",
-  "bridgeIntervalSeconds": 300
+  "bridgeIntervalSeconds": 60
 }

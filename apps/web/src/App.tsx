@@ -1,6 +1,7 @@
+import { Activity, ArrowUpRight, Bell, Blocks, ChevronDown, ChevronRight, FolderOpen, LayoutDashboard, LogOut, Menu, MessageSquare, Monitor, NotebookPen, Plug, Server, Settings2, ShieldCheck, Ticket, Users, X, type LucideIcon } from "lucide-react";
 import StrongReminders from "./StrongReminders";
-import { NavLink, Navigate, Outlet, Route, Routes, useNavigate } from "react-router-dom";
-import { useEffect, useState } from "react";
+import { NavLink, Navigate, Outlet, Route, Routes, useNavigate, useLocation } from "react-router-dom";
+import { useEffect, useRef, useState } from "react";
 import { api, getToken } from "./api";
 import { clearScopedCaches, getSession, profile, saveSession } from "./session";
 import Login from "./pages/Login";
@@ -21,7 +22,7 @@ import CursorConnections from "./pages/CursorConnections";
 import Admin from "./pages/Admin";
 import ModeSelect from "./pages/ModeSelect";
 import CursorOverview from "./pages/CursorOverview";
-import { ActiveProvider, getActiveProvider, hasActiveProvider, providerLabel, setActiveProvider } from "./providerMode";
+import { ActiveProvider, getActiveProvider, hasActiveProvider, setActiveProvider } from "./providerMode";
 import { flushManual, pendingManualCount, clearManualQueue } from "./manualQueue";
 import {loadState,clearSyncState} from "./sync";
 import {subscribeChangeHints} from "./changeHints";
@@ -70,6 +71,16 @@ function HomeRedirect() {
 
 function Shell() {
   const nav = useNavigate();
+  const location = useLocation();
+  const menuRef = useRef<HTMLDialogElement>(null);
+  const [online, setOnline] = useState(navigator.onLine);
+  useEffect(() => {
+    const update = () => setOnline(navigator.onLine);
+    window.addEventListener("online", update);
+    window.addEventListener("offline", update);
+    return () => { window.removeEventListener("online", update); window.removeEventListener("offline", update); };
+  }, []);
+  useEffect(() => { menuRef.current?.close(); }, [location.pathname, location.search]);
   const [mode, setMode] = useState<ActiveProvider>(() => getActiveProvider());
 
 
@@ -106,6 +117,7 @@ function Shell() {
   }
 
   function switchMode(next: ActiveProvider) {
+    menuRef.current?.close();
     setActiveProvider(next);
     setMode(next);
     nav(next === "cursor" ? "/cursor" : "/codex");
@@ -113,108 +125,72 @@ function Shell() {
 
   if (!window.aihubDesktop && getSession()?.user.role === "admin") return <main className="main"><Outlet /></main>;
 
+  const home = mode === "cursor" ? "/cursor" : "/codex";
+  const connections = mode === "cursor" ? "/cursor/connections" : "/connections";
+  type Item = { to: string; label: string; icon: LucideIcon };
+  const primary: Item[] = [
+    { to: home, label: "工作台", icon: LayoutDashboard },
+    { to: "/notes", label: "跨端便笺", icon: NotebookPen },
+    ...(mode === "cursor" ? [{ to: "/inbox", label: "通知中心", icon: Bell }, { to: "/rules", label: "提醒规则", icon: Settings2 }] : []),
+  ];
+  const connectionItems: Item[] = [
+    { to: connections, label: "电脑采集器", icon: Plug },
+    { to: "/devices", label: "设备管理", icon: Monitor },
+  ];
+  const extra: Item[] = mode === "codex" ? [
+    { to: "/conversations", label: "会话资产", icon: MessageSquare },
+    { to: "/config", label: "可移植配置", icon: FolderOpen },
+    { to: "/workspaces", label: "协作工作区", icon: Users },
+    { to: "/promotions", label: "优惠情报", icon: Ticket },
+  ] : [];
+  if (getSession()?.user.role === "admin") extra.push({ to: "/admin", label: "账户管理", icon: ShieldCheck });
+  const allItems = [...primary, ...connectionItems, ...extra];
+  const currentPage = allItems.find(item => item.to === location.pathname)?.label || "工作空间";
+  const renderLinks = (items: Item[]) => items.map(({ to, label, icon: Icon }) => (
+    <NavLink key={to} to={to} end onClick={() => menuRef.current?.close()}><Icon size={18} aria-hidden="true"/><span>{label}</span></NavLink>
+  ));
+  const modePicker = <div className="mode-picker" role="group" aria-label="工作模式">
+    {(["codex", "cursor"] as const).map(value => <button key={value} type="button" aria-pressed={mode === value} onClick={() => switchMode(value)}>{value === "codex" ? "Codex" : "Cursor"}</button>)}
+  </div>;
+  const brand = <div className="brand"><div className="brand-mark"><Activity size={23} aria-hidden="true"/></div><div><b>AI Hub<span className="brand-dot">.</span></b><span>你的 AI 工作空间</span></div></div>;
+
   return (
     <div className="layout">
-      <aside className="side">
-        <div className="brand">
-          <div className="brand-mark">↗</div>
-          <b>AI Hub</b>
-          <span>{mode === "cursor" ? "Cursor 额度助手" : "Codex 使用助手"}</span>
-        </div>
-        <div className="panel" style={{ margin: "0 0 16px", padding: 12 }}>
-          <p className="nav-label" style={{ marginTop: 0 }}>
-            工作模式
-          </p>
-          <div className="actions" style={{ gap: 8 }}>
-            <button className={"btn" + (mode === "codex" ? "" : " ghost")} onClick={() => switchMode("codex")}>
-              Codex 模式
-            </button>
-            <button className={"btn" + (mode === "cursor" ? "" : " ghost")} onClick={() => switchMode("cursor")}>
-              Cursor 模式
-            </button>
-          </div>
-          <p className="muted compact">当前：{providerLabel(mode)} · 采集与提醒双端继续</p>
-          <button className="btn ghost" onClick={()=>nav('/choose')}>选择工作模式</button>
-        </div>
-        {mode === "codex" ? (
-          <>
-            <p className="nav-label">CODEX 工作空间</p>
-            <nav className="nav">
-              <NavLink to="/codex">
-                <span>◈</span> Codex 工作台
-              </NavLink>
-              <NavLink to="/notes">
-                <span>▤</span> 跨端便笺
-              </NavLink>
-            </nav>
-            <p className="nav-label">连接</p>
-            <nav className="nav">
-              <NavLink to="/connections">
-                <span>↗</span> 电脑采集器
-              </NavLink>
-              <NavLink to="/devices">
-                <span>▣</span> 设备管理
-              </NavLink>
-              <NavLink to="/conversations">
-                <span>❏</span> 会话资产
-              </NavLink>
-              <NavLink to="/config">
-                <span>⛭</span> 可移植配置
-              </NavLink>
-              <NavLink to="/workspaces">
-                <span>◈</span> 协作工作区
-              </NavLink>
-              <NavLink to="/promotions">
-                <span>％</span> 优惠情报
-              </NavLink>
-              {getSession()?.user.role === "admin" && <NavLink to="/admin"><span>⚙</span> 账户管理</NavLink>}
-              <NavLink to="/login">
-                <span>⇄</span> 切换服务器
-              </NavLink>
-            </nav>
-          </>
-        ) : (
-          <>
-            <p className="nav-label">CURSOR 工作空间</p>
-            <nav className="nav">
-              <NavLink to="/cursor"><span>◈</span> Cursor 工作台</NavLink>
-              <NavLink to="/rules">
-                <span>◷</span> 提醒规则
-              </NavLink>
-              <NavLink to="/inbox">
-                <span>✉</span> 通知中心
-              </NavLink>
-              <NavLink to="/notes">
-                <span>▤</span> 跨端便笺
-              </NavLink>
-            </nav>
-            <p className="nav-label">连接</p>
-            <nav className="nav">
-              <NavLink to="/cursor/connections">
-                <span>↗</span> 电脑采集器
-              </NavLink>
-              <NavLink to="/devices">
-                <span>▣</span> 设备管理
-              </NavLink>
-              <NavLink to="/login">
-                <span>⇄</span> 切换服务器
-              </NavLink>
-            </nav>
-          </>
-        )}
+      <a className="skip-link" href="#workspace-content">跳到主要内容</a>
+      <aside className="side" aria-label="主导航">
+        {brand}
+        {modePicker}
+        <div className="nav-group"><p className="nav-label">工作空间</p><nav className="nav">{renderLinks(primary)}</nav></div>
+        <div className="nav-group"><p className="nav-label">连接与同步</p><nav className="nav">{renderLinks(connectionItems)}</nav></div>
+        {extra.length > 0 && <details className="nav-more" open={extra.some(item => item.to === location.pathname) || undefined}><summary><Blocks size={17} aria-hidden="true"/>更多工具<ChevronDown size={15} aria-hidden="true"/></summary><nav className="nav">{renderLinks(extra)}</nav></details>}
         <div className="side-foot">
-          <span className="device-tag">{mode.toUpperCase()} · COMPANION</span>
-          <p>{profile().name}</p>
-          <div className="muted">{getSession()?.user.email}</div>
-          <button className="btn ghost" onClick={() => void logout()}>
-            退出此设备
-          </button>
+          <div className="workspace-account"><div className="account-avatar" aria-hidden="true">{(getSession()?.user.email || "A").slice(0, 1).toUpperCase()}</div><div><strong>{profile().name}</strong><span>{getSession()?.user.email}</span></div></div>
+          <div className="account-actions"><NavLink to="/login"><Server size={15} aria-hidden="true"/>服务器</NavLink><button onClick={() => void logout()}><LogOut size={15} aria-hidden="true"/>退出</button></div>
         </div>
       </aside>
-      <main className="main">
-        <StrongReminders />
-        <Outlet />
-      </main>
+      <div className="workspace-shell">
+        <header className="workspace-bar">
+          <div className="desktop-breadcrumb"><span>我的工作空间</span><ChevronRight size={14} aria-hidden="true"/><strong>{currentPage}</strong></div>
+          <div className="mobile-brand">{brand}</div>
+          <div className="workspace-bar-actions"><span className="network-state"><span className={"status-dot" + (online ? "" : " offline")}/>{online ? "本机网络可用" : "当前离线"}</span><NavLink className="icon-button" to={home + "?tab=settings"} aria-label="提醒设置"><Settings2 size={18}/></NavLink></div>
+        </header>
+        <main className="main" id="workspace-content" tabIndex={-1}>
+          <StrongReminders />
+          <Outlet />
+        </main>
+      </div>
+      <nav className="mobile-nav" aria-label="底部导航">
+        <NavLink to={home}><LayoutDashboard size={21} aria-hidden="true"/><span>总览</span></NavLink>
+        <NavLink to="/notes"><NotebookPen size={21} aria-hidden="true"/><span>便笺</span></NavLink>
+        <NavLink to="/devices"><Monitor size={21} aria-hidden="true"/><span>设备</span></NavLink>
+        <button type="button" onClick={() => menuRef.current?.showModal()} aria-haspopup="dialog"><Menu size={21} aria-hidden="true"/><span>更多</span></button>
+      </nav>
+      <dialog ref={menuRef} className="mobile-menu" aria-labelledby="mobile-menu-title">
+        <div className="section-heading"><h2 id="mobile-menu-title">工作空间</h2><form method="dialog"><button className="icon-button" aria-label="关闭菜单"><X size={20}/></button></form></div>
+        {modePicker}
+        <nav className="nav">{renderLinks(allItems)}<NavLink to="/choose"><ArrowUpRight size={18} aria-hidden="true"/>选择工作模式</NavLink><NavLink to="/login"><Server size={18} aria-hidden="true"/>切换服务器</NavLink></nav>
+        <button className="btn secondary" onClick={() => void logout()}><LogOut size={16} aria-hidden="true"/>退出此设备</button>
+      </dialog>
     </div>
   );
 }

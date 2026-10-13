@@ -13,5 +13,6 @@ createRoot(document.getElementById("root")!).render(
 );
 
 import "./foundation.css";
+import "./interface.css";
 import { prepareOffline } from "./offline";
 void prepareOffline();

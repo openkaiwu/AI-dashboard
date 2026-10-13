@@ -87,7 +87,7 @@ function CursorEmpty({ connected, manualOnly }: { connected: boolean; manualOnly
   );
 }
 
-export default function Dashboard() {
+export default function Dashboard({ embedded = false }: { embedded?: boolean }) {
   const mode = getActiveProvider();
   const providerSlug = mode === "cursor" ? "cursor" : undefined;
   const [accounts, setAccounts] = useState<Account[]>([]);
@@ -114,11 +114,11 @@ export default function Dashboard() {
   return (
     <>
       <div className="top">
-        <div>
+        {embedded ? <h2 className="dashboard-section-title">已连接的账户</h2> : <div>
           <p className="eyebrow">Status first</p>
           <h1>{mode === "cursor" ? "Cursor 额度看板" : "额度看板"}</h1>
           <p>{mode === "cursor" ? "自动采集或手工登记的 Cursor 额度。采集失败时不会显示臆造数字。" : "按状态而不是平台列表排列。来源和更新时间始终可见。"}</p>
-        </div>
+        </div>}
         <Link className="btn" to="/accounts/new">登记账户</Link>
       </div>
       {error ? <p className="error">{error}</p> : null}

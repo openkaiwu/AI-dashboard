@@ -28,12 +28,15 @@ type Snapshot struct {
 	News         *News         `json:"news,omitempty"`
 }
 
-// ForPlan leaves the captured snapshot intact for identified subscriptions
-// (Plus, Pro and Pro Lite) and keeps whatever windows Codex itself reported
-// for that account. Unknown plans stay conservative and hide five-hour
-// windows until the subscription has been confirmed.
+// WindowVisibleForPlan controls presentation and analysis, never raw capture.
+// Five-hour quotas are shown only for confirmed Plus subscriptions.
+func WindowVisibleForPlan(plan string, duration int64) bool {
+	return duration != 300 || plan == "plus"
+}
+
+// ForPlan returns a view of the snapshot with unsupported windows removed.
 func (s Snapshot) ForPlan(plan string) Snapshot {
-	if plan == "plus" || plan == "pro" || plan == "prolite" {
+	if WindowVisibleForPlan(plan, 300) {
 		return s
 	}
 	out := s

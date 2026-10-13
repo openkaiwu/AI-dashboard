@@ -16,9 +16,9 @@ func usageSnapshot(observed time.Time, resetsAt int64, used float64) map[string]
 		"buckets": []map[string]any{{
 			"id": "codex",
 			"primary": map[string]any{
-				"used_percent":       used,
-				"duration_minutes":   10080,
-				"resets_at":          resetsAt,
+				"used_percent":     used,
+				"duration_minutes": 10080,
+				"resets_at":        resetsAt,
 			},
 		}},
 	}
@@ -107,7 +107,6 @@ func TestConsumptionRollupAndAPI(t *testing.T) {
 		t.Fatalf("rollup consumed %v, want 8", consumed)
 	}
 }
-
 
 // TestConsumptionHourlyAndCompare covers the hourly granularity (one-day
 // panel) and the weekly compare payload (one-week panel).
@@ -234,5 +233,81 @@ func TestConsumptionAuthAndIsolation(t *testing.T) {
 	// Invalid granularity.
 	if code, _ := call(t, ts, "GET", "/api/v1/codex/consumption?granularity=nope", token, nil); code != 400 {
 		t.Fatalf("invalid granularity %d", code)
+	}
+}
+
+// Switching plans changes every presentation path without destroying raw history.
+func TestConsumptionPlanVisibility(t *testing.T) {
+	database := testdb.Open(t)
+	ts := server(t, database)
+	token := login(t, ts, true, "desktop")["token"].(string)
+	bridgeToken := bridgeFor(t, ts, token)
+	base := time.Now().UTC().Add(-time.Hour)
+	reset := base.Add(120 * time.Hour).Unix()
+	for i, used := range []float64{10, 18} {
+		snap := usageSnapshot(base.Add(time.Duration(i)*time.Hour), reset, used)
+		snap["buckets"].([]map[string]any)[0]["secondary"] = map[string]any{"used_percent": float64(60 + i*30), "duration_minutes": 300, "resets_at": base.Add(5 * time.Hour).Unix()}
+		if code, out := call(t, ts, "POST", "/api/v1/codex/snapshot", bridgeToken, snap); code != 200 {
+			t.Fatalf("snapshot %d %v", code, out)
+		}
+	}
+	for _, plan := range []string{"plus", "pro", "plus"} {
+		if code, out := call(t, ts, "PUT", "/api/v1/codex/plan", token, map[string]string{"plan_type": plan}); code != 200 {
+			t.Fatalf("plan %d %v", code, out)
+		}
+		want := 8.0
+		if plan == "plus" {
+			want = 38
+		}
+		for _, granularity := range []string{"daily", "weekly", "monthly"} {
+			if got := sumConsumed(t, ts, token, granularity); got != want {
+				t.Fatalf("%s %s total %v want %v", plan, granularity, got, want)
+			}
+		}
+		code, out := call(t, ts, "GET", "/api/v1/codex/consumption?granularity=hourly", token, nil)
+		if code != 200 {
+			t.Fatalf("hourly %d", code)
+		}
+		total := 0.0
+		for _, h := range out["hourly"].([]any) {
+			total += h.(map[string]any)["consumed_pp"].(float64)
+		}
+		if total != want {
+			t.Fatalf("%s hourly %v want %v", plan, total, want)
+		}
+		code, out = call(t, ts, "GET", "/api/v1/codex/consumption?granularity=window&window=300", token, nil)
+		if code != 200 {
+			t.Fatalf("window %d", code)
+		}
+		if (len(out["generations"].([]any)) > 0) != (plan == "plus") {
+			t.Fatalf("%s five-hour generations: %v", plan, out)
+		}
+		for _, w := range out["windows"].([]any) {
+			if plan == "pro" && w.(map[string]any)["duration_minutes"].(float64) == 300 {
+				t.Fatal("Pro five-hour capability leaked")
+			}
+		}
+		code, out = call(t, ts, "GET", "/api/v1/codex/overview", token, nil)
+		if code != 200 {
+			t.Fatalf("overview %d", code)
+		}
+		analysis := out["devices"].([]any)[0].(map[string]any)["analysis"].(map[string]any)
+		count := 1
+		if plan == "plus" {
+			count = 2
+		}
+		if len(analysis["metrics"].([]any)) != count {
+			t.Fatalf("%s metrics: %v", plan, analysis)
+		}
+		if plan == "pro" && analysis["state"] == "slow" {
+			t.Fatalf("Pro affected by hidden window: %v", analysis)
+		}
+	}
+	var total float64
+	if err := database.QueryRow(`SELECT sum(consumed_pp) FROM codex_usage_rollup`).Scan(&total); err != nil {
+		t.Fatal(err)
+	}
+	if total != 38 {
+		t.Fatalf("raw consumption changed: %v", total)
 	}
 }

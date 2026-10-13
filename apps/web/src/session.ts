@@ -34,9 +34,11 @@ export function saveSession(s: Session | null, p = profile()) {
  else localStorage.removeItem(key);
 }
 export function scope() { const s = getSession(); if (!s) throw new Error("请先登录"); return profile().url + "|" + s.user.id + "|" + s.device_id; }
+export function accountScope() { const s = getSession(); if (!s) throw new Error("请先登录"); return profile().url + "|" + s.user.id; }
 export function clearScopedCaches() {
  const key=scope();
- for(let i=localStorage.length-1;i>=0;i--){const item=localStorage.key(i);if(item&&(item.endsWith(key)||item.includes(key+':')))localStorage.removeItem(item);}
+ const deliveryPrefix='hub_reminders:'+accountScope()+':';
+ for(let i=localStorage.length-1;i>=0;i--){const item=localStorage.key(i);if(item&&(item.endsWith(key)||item.includes(key+':')||item.startsWith(deliveryPrefix)))localStorage.removeItem(item);}
 }
 if(typeof window!=="undefined"&&window.aihubDesktop&&!window.aihubDesktop.sessionGet){
  try{

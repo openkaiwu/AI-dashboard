@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:aihub_mobile/strong_reminder_ui.dart';
+import 'package:aihub_mobile/reminder_policy.dart';
 
 void main() {
   testWidgets('strong reminder modal blocks dismiss and offers actions',
@@ -55,14 +56,8 @@ void main() {
       {'status': 'unread', 'severity': 'info', 'id': 'b'},
       {'status': 'unread', 'severity': 'warning', 'id': 'c'},
     ];
-    final next = items.cast<Map<String, dynamic>?>().firstWhere(
-          (n) =>
-              n != null &&
-              n['status'] == 'unread' &&
-              (n['severity'] == 'warning' || n['severity'] == 'critical'),
-          orElse: () => null,
-        );
-    expect(next?['id'], 'c');
+    final next = items.where(ReminderPolicy.eligibleGeneric).first;
+    expect(next['id'], 'c');
   });
 
   test('notification title uses severity badge', () {
@@ -74,4 +69,4 @@ void main() {
     expect(title, '[强提醒] Codex · 临近重置');
   });
 }
-
+

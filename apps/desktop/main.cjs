@@ -14,13 +14,14 @@ function allowOrigin(url){try{return new URL(url).origin===uiOrigin();}catch{ret
 if(!app.requestSingleInstanceLock())app.quit();
 else {
  app.on('second-instance',()=>{win?.show();win?.focus();});
+ app.on('activate',()=>{win?.show();win?.focus();});
  app.on('before-quit',()=>{quitting=true;runtime.stopManaged();});
  app.whenReady().then(async()=>{
   if(platform.appUserModelIdSupported())app.setAppUserModelId('local.aihub.codex');
   if(platform.loginItemSupported())app.setLoginItemSettings({openAtLogin:true,args:['--startup']});
   win=new BrowserWindow({width:1220,height:860,minWidth:420,minHeight:600,title:'AI Hub · Codex 使用助手',backgroundColor:'#ffffff',show:false,webPreferences:{preload:path.join(__dirname,'preload.cjs'),nodeIntegration:false,contextIsolation:true,sandbox:true,backgroundThrottling:false}});
   win.removeMenu();
-  win.webContents.on('before-input-event',(event,input)=>{if(input.control&&input.shift&&input.key.toLowerCase()==='t'&&input.type==='keyDown'){event.preventDefault();void showAlert({title:'强提醒测试',body:'这是演示，不会改变真实额度或提醒状态。'});}});
+  win.webContents.on('before-input-event',(event,input)=>{if((input.control||input.meta)&&input.shift&&input.key.toLowerCase()==='t'&&input.type==='keyDown'){event.preventDefault();void showAlert({title:'强提醒测试',body:'这是演示，不会改变真实额度或提醒状态。'});}});
   win.on('close',e=>{if(!quitting&&trayReady){e.preventDefault();win.hide();}});
   win.webContents.setWindowOpenHandler(({url})=>{if(/^https:\/\/(x\.com|developers\.openai\.com|learn\.chatgpt\.com)\//.test(url))void shell.openExternal(url);return {action:'deny'};});
   win.webContents.on('will-navigate',(e,url)=>{if(!allowOrigin(url))e.preventDefault();});
@@ -28,7 +29,7 @@ else {
   const icon=nativeImage.createFromPath(path.join(__dirname,'icon.png'));win.setIcon(icon);
   let trayReady=true;
   try{
-   tray=new Tray(icon);tray.setToolTip('AI Hub · 额度强提醒');
+   tray=new Tray(platform.IS_MAC?icon.resize({width:18,height:18}):icon);tray.setToolTip('AI Hub · 额度强提醒');
    buildTrayMenu();
    tray.on('double-click',()=>{win.show();win.focus();});
   }catch{trayReady=false;}
@@ -48,8 +49,9 @@ else {
   async function showAlert(value){
    if(alertOpen||!value||typeof value.title!=='string'||typeof value.body!=='string'||value.title.length>200||value.body.length>3000)return 'retry';
    alertOpen=true;win.show();win.restore();win.focus();win.flashFrame(true);
-   try{const result=await dialog.showMessageBox(win,{type:'warning',title:'AI Hub · 额度强提醒',message:value.title,detail:value.body+'\n\n当前采集为账户额度，无法定位具体任务的 token 消耗。',buttons:['已读','1 小时后提醒','忽略本次','打开 Codex 手动停止'],defaultId:0,cancelId:0,noLink:true});
-    if(result.response===3){await shell.openExternal('codex://');return 'read';}
+   const isCodex=value.provider==='Codex';
+   try{const result=await dialog.showMessageBox(win,{type:'warning',title:'AI Hub · 重要提醒',message:value.title,detail:value.body+'\n\n同一事件只自动提醒一次；1 小时后重新检查；忽略持续到本次事件失效。处理状态同步到其他设备。',buttons:['已读','1 小时后提醒','忽略本次',...(isCodex?['打开 Codex 手动停止']:[])],defaultId:0,cancelId:0,noLink:true});
+    if(isCodex&&result.response===3){await shell.openExternal('codex://');return 'read';}
     return ['read','snooze','dismiss'][result.response]||'read';
    }finally{win.flashFrame(false);alertOpen=false;}
   }

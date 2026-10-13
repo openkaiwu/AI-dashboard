@@ -99,6 +99,10 @@ class StrongReminderDialog extends StatelessWidget {
                           : Theme.of(context).textTheme.bodyMedium,
                     ),
                   ),
+              const Padding(
+                padding: EdgeInsets.only(top: 8),
+                child: Text('同一事件只自动提醒一次；稍后会在 1 小时后重新检查；忽略持续到本次事件失效。处理状态会同步到其他设备。'),
+              ),
               if (when != null) ...[
                 const SizedBox(height: 8),
                 Text(

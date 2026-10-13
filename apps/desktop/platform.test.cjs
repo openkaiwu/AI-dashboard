@@ -3,6 +3,14 @@ const assert=require('node:assert/strict');
 const path=require('node:path');
 const {binNames,loginItemSupportedFor,appUserModelIdSupportedFor,codexSearchRoots,askModeLocalHint,localModeHelp}=require('./platform.cjs');
 
+test('database setup executes CREATE DATABASE outside the procedural transaction',()=>{
+ const {databaseSetupSql}=require('./platform.cjs');
+ const sql=databaseSetupSql('a'.repeat(48));
+ assert.match(sql,/END \$\$;\nSELECT 'CREATE DATABASE/);
+ assert.match(sql,/WHERE NOT EXISTS.*\\gexec\n$/);
+ assert.throws(()=>databaseSetupSql("'; DROP DATABASE postgres;"));
+});
+
 test('binary names match build.sh outputs and packaged staging per platform',()=>{
 	const win=binNames('win32','x64');
 	assert.equal(win.serverDev,'aihub-windows-amd64.exe');

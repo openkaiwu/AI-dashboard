@@ -1,3 +1,4 @@
+import { Activity, Cloud, Laptop, ShieldCheck } from "lucide-react";
 import { FormEvent, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api, ApiError } from "../api";
@@ -14,7 +15,7 @@ export default function Login(){
  if(mode==="register"){await api.register(invite.trim(),email,password,note.trim());setPendingEmail(email);setMode("pending");return;}
  const s=await api.login(email,password,device);saveSession(s);nav(window.aihubDesktop?"/choose":"/admin");
  }catch(e){if(e instanceof ApiError&&e.code==="account_pending"){setPendingEmail(email);setMode("pending");}else{setError(e instanceof ApiError?e.message:"无法连接服务器，请检查地址与网络");}}finally{setBusy(false);}}
- return <div className="auth-shell"><div className="auth-intro"><p className="eyebrow">AI HUB / YOUR PERSONAL CONTROL ROOM</p><div className="auth-orbit">↗</div><h1>你的 AI 工作，<br/>在每一端接续。</h1><p className="lead">服务资产一处掌握。电脑与手机跨网络同步，<br/>数据留在你选择的服务器。</p><div className="auth-features"><span>01 / 自部署</span><span>02 / 离线优先</span><span>03 / 跨设备</span></div></div>
+ return <div className="auth-shell"><div className="auth-intro"><p className="eyebrow">AI HUB / YOUR PERSONAL CONTROL ROOM</p><div className="auth-orbit"><Activity aria-hidden="true"/></div><h1>你的 AI 工作，<br/>在每一端接续。</h1><p className="lead">服务资产一处掌握。电脑与手机跨网络同步，<br/>数据留在你选择的服务器。</p><div className="auth-features"><span><ShieldCheck size={15} aria-hidden="true"/>自部署</span><span><Cloud size={15} aria-hidden="true"/>离线优先</span><span><Laptop size={15} aria-hidden="true"/>跨设备</span></div></div>
  <div className="auth-card"><p className="eyebrow">WELCOME TO YOUR HUB</p><h2>连接你的工作空间</h2><p className="muted">{mode==="register"?"凭邀请码注册，管理员审核后即可登录。":"邀请码注册 · 管理员审核后生效；手机和电脑使用同一账户。"}</p>
  <label className="field"><span>服务器</span><select value={profile().id} onChange={e=>selectProfile(e.target.value)}>{profiles().map(p=><option key={p.id} value={p.id}>{p.name} · {p.url}</option>)}</select></label>
  <div className="actions"><button type="button" className="btn ghost" onClick={()=>{setEditID(undefined);setName("");setURL("https://");setShowProfile(!showProfile);}}>＋ 添加服务器</button><button type="button" className="btn ghost" onClick={()=>{setEditID(profile().id);setName(profile().name);setURL(profile().url);setShowProfile(true);}}>编辑服务器</button>{profiles().length>1&&<button type="button" className="btn ghost" onClick={()=>{try{removeProfile(profile().id);location.reload();}catch(e){setError(String(e));}}}>移除此服务器配置</button>}</div>

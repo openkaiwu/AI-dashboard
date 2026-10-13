@@ -50,7 +50,7 @@ function bundledConfig(){
 }
 function loadConfig(dir){
  if(cachedConfig)return cachedConfig;
- const cfg={uiMode:'ask',cloudServer:DEFAULT_CLOUD,profileId:'public-cloud',profileName:'公网 AI Hub',bridgeIntervalSeconds:300,...bundledConfig(),...readJson(path.join(dir,'app-config.json'))};
+ const cfg={uiMode:'ask',cloudServer:DEFAULT_CLOUD,profileId:'public-cloud',profileName:'公网 AI Hub',bridgeIntervalSeconds:60,...bundledConfig(),...readJson(path.join(dir,'app-config.json'))};
  cachedConfig=cfg;
  return cfg;
 }
@@ -193,7 +193,7 @@ function ensureBridgeConfig(dir,config){
   return cfgPath;
  }
  const example=app.isPackaged?path.join(process.resourcesPath,'bridge.example.json'):path.join(__dirname,'resources','bridge.example.json');
-  const seed=readJson(example)||{server:config.cloudServer||DEFAULT_CLOUD,codex_path:'',cursor_enabled:true,interval_seconds:300};
+ const seed=readJson(example)||{server:config.cloudServer||DEFAULT_CLOUD,codex_path:'',cursor_enabled:true,interval_seconds:60};
  delete seed.token;
  fs.writeFileSync(cfgPath,JSON.stringify(seed,null,2));
  return cfgPath;
@@ -259,7 +259,7 @@ async function syncBridgeSession(webContents,config){
  stopBridge();
  try{
   const token=await createBridgeToken(picked.server,session.token,'我的电脑');
-  writeBridge(dir,{server:picked.server,device_id:session.device_id,codex_path:await platform.findCodex()||'',cursor_enabled:true,interval_seconds:config.bridgeIntervalSeconds||300},token);
+  writeBridge(dir,{server:picked.server,device_id:session.device_id,codex_path:await platform.findCodex()||'',cursor_enabled:true,interval_seconds:config.bridgeIntervalSeconds||60},token);
   await ensureBridge(dir,config);
  }catch(e){lastError=`采集器连接失败：${e.message}`;}
 }

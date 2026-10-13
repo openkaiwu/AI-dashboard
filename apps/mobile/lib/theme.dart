@@ -1,13 +1,13 @@
 import 'package:flutter/material.dart';
 
 class HubTheme {
-  static const ink = Color(0xff1e2921);
-  static const muted = Color(0xff5d6c60);
-  static const line = Color(0xffdfe6dd);
-  static const accent = Color(0xff477527);
-  static const accentDim = Color(0xffedf4e5);
-  static const warn = Color(0xff96600b);
-  static const bg2 = Color(0xfff7f9f5);
+  static const ink = Color(0xff18243c);
+  static const muted = Color(0xff63718a);
+  static const line = Color(0xffe3e9f2);
+  static const accent = Color(0xff3563e9);
+  static const accentDim = Color(0xffedf2ff);
+  static const warn = Color(0xff95600a);
+  static const bg2 = Color(0xfff6f8fc);
 
   static ThemeData light() {
     final base = ColorScheme.fromSeed(
@@ -23,18 +23,22 @@ class HubTheme {
         surface: Colors.white,
         onSurface: ink,
       ),
-      scaffoldBackgroundColor: Colors.white,
+      scaffoldBackgroundColor: bg2,
+      visualDensity: VisualDensity.standard,
       appBarTheme: const AppBarTheme(
         backgroundColor: Colors.white,
         foregroundColor: ink,
         elevation: 0,
+        scrolledUnderElevation: 0,
+        toolbarHeight: 68,
+        shape: Border(bottom: BorderSide(color: line)),
         centerTitle: false,
       ),
       cardTheme: CardThemeData(
         color: Colors.white,
         elevation: 0,
         shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(18),
+          borderRadius: BorderRadius.circular(16),
           side: const BorderSide(color: line),
         ),
         margin: const EdgeInsets.only(bottom: 14),
@@ -42,13 +46,57 @@ class HubTheme {
       navigationBarTheme: NavigationBarThemeData(
         backgroundColor: Colors.white,
         indicatorColor: accentDim,
-        labelTextStyle: WidgetStatePropertyAll(
-          TextStyle(fontSize: 12, color: ink.withValues(alpha: 0.85)),
+        height: 72,
+        elevation: 0,
+        iconTheme: WidgetStateProperty.resolveWith((states) => IconThemeData(
+              size: 22,
+              color: states.contains(WidgetState.selected) ? accent : muted,
+            )),
+        labelTextStyle: WidgetStateProperty.resolveWith((states) => TextStyle(
+              fontSize: 11,
+              fontWeight: states.contains(WidgetState.selected)
+                  ? FontWeight.w600
+                  : FontWeight.w400,
+              color: states.contains(WidgetState.selected) ? accent : muted,
+            )),
+      ),
+      tabBarTheme: const TabBarThemeData(
+        labelColor: accent,
+        unselectedLabelColor: muted,
+        indicatorColor: accent,
+        dividerColor: line,
+        indicatorSize: TabBarIndicatorSize.label,
+        tabAlignment: TabAlignment.start,
+        labelStyle: TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+        unselectedLabelStyle:
+            TextStyle(fontSize: 13, fontWeight: FontWeight.w400),
+        labelPadding: EdgeInsets.symmetric(horizontal: 14),
+      ),
+      dividerTheme: const DividerThemeData(color: line, thickness: 1),
+      chipTheme: ChipThemeData(
+        backgroundColor: Colors.white,
+        selectedColor: accentDim,
+        side: const BorderSide(color: line),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(9)),
+        labelStyle: const TextStyle(fontSize: 12, color: ink),
+      ),
+      outlinedButtonTheme: OutlinedButtonThemeData(
+        style: OutlinedButton.styleFrom(
+          foregroundColor: ink,
+          side: const BorderSide(color: line),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
         ),
+      ),
+      bottomSheetTheme: const BottomSheetThemeData(
+        backgroundColor: Colors.white,
+        surfaceTintColor: Colors.transparent,
+        showDragHandle: true,
       ),
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
-        fillColor: bg2,
+        fillColor: Colors.white,
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(12),
           borderSide: const BorderSide(color: line),
@@ -81,7 +129,7 @@ class HubTheme {
           letterSpacing: -0.4,
         ),
         headlineMedium: TextStyle(
-          fontSize: 28,
+          fontSize: 26,
           fontWeight: FontWeight.w600,
           color: ink,
           letterSpacing: -0.5,
@@ -91,7 +139,7 @@ class HubTheme {
           fontWeight: FontWeight.w600,
           color: ink,
         ),
-        bodyMedium: TextStyle(fontSize: 14, height: 1.7, color: muted),
+        bodyMedium: TextStyle(fontSize: 13, height: 1.65, color: muted),
         labelSmall: TextStyle(fontSize: 11, color: muted),
       ),
     );

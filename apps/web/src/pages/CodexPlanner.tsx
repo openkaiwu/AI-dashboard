@@ -1,14 +1,15 @@
 import {useState} from 'react';
 import {Link} from 'react-router-dom';
 import {budget} from '../quotaBudget';
-export default function CodexPlanner({device,stale}:{device:any;stale:boolean}){
+import {showsFiveHour,visibleQuotaWindows} from '../quotaVisibility';
+export default function CodexPlanner({device,stale,planType}:{device:any;stale:boolean;planType:string}){
  const [reserve,setReserve]=useState(10);
  if(!device)return <p className="panel">连接电脑后可以规划额度。</p>;
- const metrics=device.analysis.metrics;
+ const metrics=visibleQuotaWindows<any>(device.analysis.metrics,planType);
  const events=[...metrics.filter((m:any)=>m.resets_at).map((m:any)=>({id:m.bucket+m.slot,title:`${m.bucket} · ${m.duration_minutes/60} 小时窗口重置`,at:m.resets_at})),...(device.snapshot.reset_credits?.items||[]).filter((c:any)=>c.expires_at).map((c:any)=>({id:c.id,title:'重置卡到期',at:c.expires_at}))].sort((a,b)=>a.at-b.at);
  function download(){
   const rows=[['采集时间','额度桶','窗口','已用百分比','重置时间']];
-  for(const s of device.history)for(const b of s.buckets||[])for(const slot of ['primary','secondary'])if(b[slot])rows.push([s.observed_at,b.id,slot,String(b[slot].used_percent),b[slot].resets_at?new Date(b[slot].resets_at*1000).toISOString():'']);
+  for(const s of device.history)for(const b of s.buckets||[])for(const slot of ['primary','secondary'])if(b[slot]&&(b[slot].duration_minutes!==300||showsFiveHour(planType)))rows.push([s.observed_at,b.id,slot,String(b[slot].used_percent),b[slot].resets_at?new Date(b[slot].resets_at*1000).toISOString():'']);
   const csv=rows.map(r=>r.map((v:string)=>'"'+(/^[=+@\-\t\r]/.test(v)?"'":'')+v.replaceAll('"','""')+'"').join(',')).join('\r\n');
   const url=URL.createObjectURL(new Blob(['\uFEFF'+csv],{type:'text/csv;charset=utf-8'}));const a=document.createElement('a');a.href=url;a.download='codex-quota-history.csv';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
  }

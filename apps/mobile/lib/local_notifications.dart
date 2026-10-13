@@ -27,9 +27,9 @@ class LocalNotifications {
           DarwinNotificationCategory(
             categoryId,
             actions: [
-              DarwinNotificationAction.plain('read', '已读'),
-              DarwinNotificationAction.plain('snooze', '1 小时后提醒'),
-              DarwinNotificationAction.plain('dismiss', '忽略本次'),
+              DarwinNotificationAction.plain('read', '已读', options: {DarwinNotificationActionOption.foreground}),
+              DarwinNotificationAction.plain('snooze', '1 小时后提醒', options: {DarwinNotificationActionOption.foreground}),
+              DarwinNotificationAction.plain('dismiss', '忽略本次', options: {DarwinNotificationActionOption.foreground}),
             ],
           ),
         ],
@@ -39,9 +39,10 @@ class LocalNotifications {
         onDidReceiveNotificationResponse: (response) {
           final id = response.payload;
           if (id == null || id.isEmpty) return;
-          final action = (response.actionId == null || response.actionId!.isEmpty)
-              ? 'open'
-              : response.actionId!;
+          final action =
+              (response.actionId == null || response.actionId!.isEmpty)
+                  ? 'open'
+                  : response.actionId!;
           unawaited(onAction?.call(id, action));
         },
       );
@@ -68,14 +69,23 @@ class LocalNotifications {
     }
   }
 
-  static Future<void> showReminder({
+  static Future<bool> showReminder({
     required String id,
     required String title,
     required String body,
   }) async {
     if (!_ready) await init();
-    if (!_ready) return;
+    if (!_ready) return false;
     try {
+      if (Platform.isAndroid) {
+        final android = _plugin.resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
+        if (await android?.areNotificationsEnabled() != true) return false;
+      }
+      if (Platform.isIOS) {
+        final ios = _plugin.resolvePlatformSpecificImplementation<IOSFlutterLocalNotificationsPlugin>();
+        final permission = await ios?.checkPermissions();
+        if (permission?.isEnabled != true && permission?.isProvisionalEnabled != true) return false;
+      }
       final details = NotificationDetails(
         android: AndroidNotificationDetails(
           channelId,
@@ -89,11 +99,13 @@ class LocalNotifications {
           styleInformation: BigTextStyleInformation(body),
           playSound: true,
           enableVibration: true,
-          fullScreenIntent: true,
+          fullScreenIntent: false,
           actions: const [
             AndroidNotificationAction('read', '已读', showsUserInterface: true),
-            AndroidNotificationAction('snooze', '1 小时后提醒', showsUserInterface: true),
-            AndroidNotificationAction('dismiss', '忽略本次', showsUserInterface: true),
+            AndroidNotificationAction('snooze', '1 小时后提醒',
+                showsUserInterface: true),
+            AndroidNotificationAction('dismiss', '忽略本次',
+                showsUserInterface: true),
           ],
         ),
         iOS: const DarwinNotificationDetails(
@@ -113,6 +125,13 @@ class LocalNotifications {
         notificationDetails: details,
         payload: id,
       );
-    } catch (_) {}
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  static Future<void> cancelReminder(String id) async {
+    if (_ready) await _plugin.cancel(id: id.hashCode & 0x7fffffff);
   }
 }

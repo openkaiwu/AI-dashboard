@@ -1,121 +1,87 @@
-import {useEffect,useState} from "react";
-import {request} from "./api";
-type UsageSeries={bucket_start:string;consumed_pp:number|null;level_end:number|null;peak_pp_hour:number|null;resets:number|null;coverage_hours:number};
-type UsageGeneration={resets_at:number|null;start:string;end:string;points:{t:string;used:number}[]};
-type UsageWindow={id:string;duration_minutes:number;present:boolean};
-type Hourly={hour:string;consumed_pp:number;samples:number;resets:number};
-type Tip={x:number;y:number;lines:string[]};
-type UsageData={generated_at:string;tz_offset_minutes:number;windows?:UsageWindow[];series?:UsageSeries[];generations?:UsageGeneration[];coverage?:{first_day:string;days_with_data:number};reference_pp?:number;plan_type?:string;compare?:{this_pp:number;prev_pp:number;ratio?:number}};
-const PLAN_LABEL:Record<string,string>={plus:"Plus",pro:"Pro",prolite:"Pro Lite",unknown:"套餐未确认"};
-const when=(v:string)=>new Date(v).toLocaleString();
-const sum=(a:UsageSeries[])=>a.reduce((x,s)=>x+(s.consumed_pp||0),0);
-export default function UsageTab(){
- const[loading,setLoading]=useState(true);
- const[d300,setD300]=useState<UsageData|null>(null);
- const[w10080,setW10080]=useState<UsageData|null>(null);
- const[h24,setH24]=useState<{hourly?:Hourly[];plan_type?:string}|null>(null);
- const[d30,setD30]=useState<UsageData|null>(null);
- const[wk,setWk]=useState<UsageData|null>(null);
- const[mo,setMo]=useState<UsageData|null>(null);
- const[error,setError]=useState("");
- const[tip,setTip]=useState<Tip|null>(null);
- useEffect(()=>{void reloadAll();},[]);
- async function reloadAll(){
-  setLoading(true);
-  const r=(g:string,extra="")=>request<UsageData>(`/api/v1/codex/consumption?granularity=${g}${extra}`).catch(()=>null);
-  const[a,b,c,d,e,f]=await Promise.all([r("window","&window=300"),r("window","&window=10080"),r("hourly","&hours=24"),r("daily","&days=30"),r("weekly","&compare=true"),r("monthly")]);
-  setD300(a);setW10080(b);setH24(c);setD30(d);setWk(e);setMo(f);
-  setError(a||b||c||d||e||f?"":"消耗数据暂不可用，请稍后重试。");
-  setLoading(false);
- }
- const planType=d300?.plan_type||w10080?.plan_type||d30?.plan_type||"unknown";
- const fiveOK=(planType==="plus"||planType==="pro")&&!!d300?.windows?.find(w=>w.duration_minutes===300&&w.present);
- const daily=(d30?.series||[]).filter(s=>s.consumed_pp!=null);
- const last7=daily.slice(-7);
- const last7sum=last7.reduce((a,s)=>a+(s.consumed_pp||0),0);
- const last24=(h24?.hourly||[]).reduce((a,h)=>a+(h.consumed_pp||0),0);
- const wGen=(w10080?.generations||[]);
- const wCur=wGen.length>0?wGen[wGen.length-1].points[wGen[wGen.length-1].points.length-1]:null;
- const hourly=(h24?.hourly||[]);
- const cmp=wk?.compare;
- return <section className="panel">
-  <div className="section-heading"><h2>消耗分析</h2><button className="btn secondary" onClick={()=>void reloadAll()}>↻ 刷新</button></div>
-  <p className="muted">四个时间维度的额度消耗：五小时窗口实时状态、最近 24 小时、最近 7 天与最近 30 天。重置不算消耗，空档表示无样本。</p>
-  {loading&&<><div className="skeleton" style={{height:90}}/><div className="skeleton" style={{height:150,marginTop:12}}/><div className="skeleton" style={{height:150,marginTop:12}}/><div className="skeleton" style={{height:150,marginTop:12}}/></>}
-  {!loading&&error&&<p className="error" role="alert">{error} <button className="btn ghost" onClick={()=>void reloadAll()}>重试</button></p>}
-  {!loading&&<>
-  <article className="device-card">
-   <h2>⏱ 五小时窗口（实时）{planType!=="unknown"&&<span className="device-tag" style={{marginLeft:8}}>{PLAN_LABEL[planType]||planType}</span>}</h2>
-   {fiveOK&&d300&&d300.generations&&d300.generations.length>0?(()=>{
-    const gens=d300.generations;
-    const cur=gens[gens.length-1];
-    const last=cur.points[cur.points.length-1];
-    const remaining=100-last.used;
-    const prev=cur.points.length>=2?cur.points[cur.points.length-2]:null;
-    const pace=prev?Math.max(0,(last.used-prev.used)/Math.max(1,(new Date(last.t).getTime()-new Date(prev.t).getTime())/36e5)):0;
-    const proj=pace>0.5?new Date(new Date(last.t).getTime()+((100-last.used)/pace)*36e5).toLocaleTimeString():"速率平稳";
-    const resetAt=cur.resets_at?new Date(cur.resets_at*1000):null;
-    const runMin=resetAt?Math.round((Date.now()-(resetAt.getTime()-300*6e4))/6e4):null;
-    return <><div className="quota-number">{remaining.toFixed(0)}<span>% 剩余</span></div>
-    <WindowGenerations gens={gens}/>
-    <p className="muted compact">已运行 {runMin!=null?`${Math.floor(runMin/60)} 小时 ${runMin%60} 分`:"—"} / 5 小时 · 速率 {pace.toFixed(1)} pp/小时 · 预计触顶 {proj}{resetAt?` · 重置于 ${when(resetAt.toISOString())}`:""}</p></>;
-   })():<p className="muted">{planType==="unknown"?"请先在「使用计划」选择套餐以启用五小时视图。":"当前套餐 Codex 未上报五小时窗口（以 Codex 实际显示为准）。"}</p>}
-  </article>
-  <article className="device-card">
-   <h2>📅 一天</h2>
-   <div className="quota-number">{last24.toFixed(1)}<span>pp / 近 24 小时</span></div>
-   {hourly.length>0&&<MiniBars rows={hourly}/>}
-   <BarChart series={daily} scale={Math.max(100,sum(daily))} granularity="daily" reference={d30&&d30.reference_pp!=null?d30.reference_pp:0} onTip={setTip} clearTip={()=>setTip(null)}/>
-   <p className="muted compact">昨日 {yesterdaySum(daily)} pp · 30 天日均 {(sum(daily)/Math.max(1,daily.length)).toFixed(1)} pp · 峰值 {peakOf(daily).toFixed(1)} pp</p>
-  </article>
-  <article className="device-card">
-   <h2>🗓 一周</h2>
-   <div className="quota-number">{last7sum.toFixed(1)}<span>pp / 近 7 天</span></div>
-   <BarChart series={last7} scale={Math.max(100,last7sum)} granularity="weekly" reference={0} onTip={setTip} clearTip={()=>setTip(null)}/>
-   {cmp&&<p className="muted compact">本日历周 {cmp.this_pp.toFixed(1)} pp · 上周同期 {cmp.prev_pp.toFixed(1)} pp{cmp.ratio!=null?` · 环比 ${(cmp.ratio*100).toFixed(0)}%`:""}</p>}
-   {wCur&&<p className="muted compact">周窗口（Codex 原生）：已用 {wCur.used.toFixed(0)}% · 与"近 7 天消耗"口径不同，两者并列仅供参考。</p>}
-  </article>
-  <article className="device-card">
-   <h2>📆 一月</h2>
-   <div className="quota-number">{sum(daily).toFixed(1)}<span>pp / 近 30 天</span></div>
-   <BarChart series={daily} scale={Math.max(100,sum(daily))} granularity="monthly" reference={0} onTip={setTip} clearTip={()=>setTip(null)}/>
-   {mo?.series&&mo.series.length>0&&<p className="muted compact">月度合计：{mo.series.map(m=>`${m.bucket_start.slice(0,7)} ${m.consumed_pp==null?"—":m.consumed_pp.toFixed(1)+" pp"}`).join(" · ")}（自部署起积累）</p>}
-   <p className="muted compact">30 天日均 {(sum(daily)/Math.max(1,daily.length)).toFixed(1)} pp · 覆盖 {daily.length} 天。</p>
-  </article>
-  </>}
-  {!loading&&tip&&<div style={{position:"fixed",left:tip.x+14,top:tip.y-12,pointerEvents:"none",background:"var(--panel)",border:"1px solid var(--line)",borderRadius:8,padding:"6px 10px",fontSize:12,zIndex:9,boxShadow:"var(--shadow)"}}>{tip.lines.map((l,i)=><div key={i}>{l}</div>)}</div>}
- </section>;
+import {useCallback,useEffect,useRef,useState} from 'react';
+import {Link} from 'react-router-dom';
+import {Activity,ArrowUpRight,ChartNoAxesColumn,Clock3,CloudOff,Info,RefreshCw} from 'lucide-react';
+import {request} from './api';
+import {showsFiveHour} from './quotaVisibility';
+import {dailyPoints,emptyResources,hourlyPoints,latestFive,sampleTotal,settleResource} from './consumption';
+import type {ChartPoint,UsageData,UsageResources} from './consumption';
+
+type Range='24h'|'7d'|'30d';
+const ranges:Range[]=['24h','7d','30d'];
+const labels:Record<Range,string>={'24h':'近 24 小时','7d':'近 7 天','30d':'近 30 天'};
+const when=(date:string)=>new Date(date).toLocaleString();
+
+export default function UsageTab({planType}:{planType:string}) {
+  const [basis,setBasis]=useState('10080');
+  const [range,setRange]=useState<Range>('7d');
+  const [revision,setRevision]=useState(0);
+  const scope=planType+':'+basis;
+  const [result,setResult]=useState({scope,resources:emptyResources()});
+  const current=result.scope===scope?result.resources:emptyResources();
+  const retry=useCallback(()=>setRevision(v=>v+1),[]);
+  const scopeRef=useRef(scope);scopeRef.current=scope;
+  useEffect(()=>{
+    const controller=new AbortController();let active=true;
+    const keys:('hourly'|'daily'|'five')[]=showsFiveHour(planType)?['hourly','daily','five']:['hourly','daily'];
+    setResult(previous=>({scope,resources:Object.fromEntries(Object.entries(previous.scope===scope?previous.resources:emptyResources()).map(([key,resource])=>[key,{...resource,loading:keys.includes(key as typeof keys[number])}])) as UsageResources}));
+    for(const key of keys) {
+      const query=key==='five'?'granularity=window&window=300':key==='hourly'?`granularity=hourly&hours=24&window=${basis}`:`granularity=daily&days=30&window=${basis}`;
+      void request<UsageData>('/api/v1/codex/consumption?'+query,{signal:AbortSignal.any([controller.signal,AbortSignal.timeout(15000)])}).then(data=>{
+        const rows=key==='five'?data.generations:key==='hourly'?data.hourly:data.series;
+        if(!Array.isArray(rows))throw new Error('Missing consumption series');
+        return {...data,generated_at:data.generated_at||new Date().toISOString()};
+      }).catch(()=>undefined).then(data=>{
+        if(!active||scopeRef.current!==scope)return;
+        setResult(previous=>({scope,resources:{...previous.resources,[key]:settleResource(previous.resources[key],data)}}));
+      });
+    }
+    return()=>{active=false;controller.abort();};
+  },[scope,basis,planType,revision]);
+  return <ConsumptionView planType={planType} basis={basis} onBasis={setBasis} range={range} onRange={setRange} resources={current} onRefresh={retry}/>;
 }
-function yesterdaySum(daily:UsageSeries[]){
- const y=new Date(Date.now()-864e5).toLocaleDateString("sv");
- const row=daily.find(s=>s.bucket_start===y);
- return row&&row.consumed_pp!=null?row.consumed_pp:0;
+
+export function ConsumptionView({planType,basis,onBasis,range,onRange,resources,onRefresh,now=Date.now()}:{planType:string;basis:string;onBasis:(basis:string)=>void;range:Range;onRange:(range:Range)=>void;resources:UsageResources;onRefresh:()=>void;now?:number}) {
+  const five=showsFiveHour(planType),entries=five?Object.values(resources):[resources.hourly,resources.daily];
+  const loading=entries.some(r=>r.loading),allFailed=entries.every(r=>r.error&&!r.data)&&!loading;
+  const points:Record<Range,ChartPoint[]>={'24h':hourlyPoints(resources.hourly.data,now),'7d':dailyPoints(resources.daily.data,7,now),'30d':dailyPoints(resources.daily.data,30,now)};
+  const resource=(r:Range)=>r==='24h'?resources.hourly:resources.daily;
+  const selected=resource(range),series=points[range],total=sampleTotal(series),known=series.filter(p=>p.value!==null);
+  const currentFive=latestFive(resources.five.data);
+  const fiveExpired=!!currentFive?.resetsAt&&currentFive.resetsAt*1000<=now;
+  const basisLabel=basis==='300'?'5 小时额度':'周额度';
+  return <section className="consumption-workspace" aria-label="消耗分析详情" aria-busy={loading}>
+    <div className="consumption-toolbar"><div className="consumption-basis"><ChartNoAxesColumn size={18} aria-hidden="true"/>{five?<label>统计额度<select aria-label="统计额度" value={basis} onChange={e=>onBasis(e.target.value)}><option value="10080">周额度</option><option value="300">5 小时额度</option></select></label>:<strong>周额度消耗</strong>}<span className="muted compact">重置不计入消耗</span></div><button className="btn secondary" disabled={loading} onClick={onRefresh}><RefreshCw size={15} className={loading?'is-spinning':''} aria-hidden="true"/>{loading?'正在更新':'刷新数据'}</button></div>
+    {planType==='unknown'&&<p className="consumption-notice"><Info size={16} aria-hidden="true"/>套餐尚未确认，暂按周额度展示。<Link to="/codex?tab=settings">前往提醒设置</Link></p>}
+    {allFailed?<UsagePlaceholder kind="error" title="暂时无法获取消耗数据" onRetry={onRefresh}/>:<>
+      <div className={'consumption-summary'+(five?' has-five':'')}>
+        {five&&<article className="consumption-stat five-stat"><span className="stat-label"><Clock3 size={16} aria-hidden="true"/>5 小时窗口<span className="device-tag">Plus</span></span>{resources.five.loading&&!resources.five.data?<div className="skeleton stat-skeleton"/>:<strong>{currentFive&&!fiveExpired?currentFive.remaining.toFixed(0):'—'}{currentFive&&!fiveExpired&&<small>% 剩余</small>}</strong>}<span className="stat-caption">{resources.five.error?(resources.five.data?'更新失败 · 上次数据':'获取失败'):fiveExpired?'已到重置时间，等待新采集':currentFive?'最近采集 '+new Date(currentFive.observed).toLocaleTimeString():resources.five.loading?'正在读取额度':'暂无窗口样本'}</span></article>}
+        {ranges.map(r=>{const res=resource(r),value=sampleTotal(points[r]);return <button key={r} className={'consumption-stat'+(r===range?' selected':'')} onClick={()=>onRange(r)} aria-pressed={r===range}><span className="stat-label">{labels[r]}<ArrowUpRight size={16} aria-hidden="true"/></span>{res.loading&&!res.data?<div className="skeleton stat-skeleton"/>:<strong>{value===null?'—':value.toFixed(1)}{value!==null&&<small>个百分点</small>}</strong>}<span className="stat-caption">{res.error?(res.data?'更新失败 · 上次数据':'获取失败'):res.loading?'正在更新':value===null?'等待采集样本':`${basisLabel} · ${points[r].filter(p=>p.value!==null).length}/${points[r].length} ${r==='24h'?'小时':'天'}有样本`}</span></button>;})}
+      </div>
+      {entries.some(r=>r.error)&&<p className="consumption-notice" role="status"><CloudOff size={16} aria-hidden="true"/>部分数据更新失败；已有数据保留，未获取的数据以“—”显示。</p>}
+      <section className="panel consumption-chart-panel">
+        <div className="consumption-chart-header"><div><p className="eyebrow">USAGE TREND</p><h2>消耗趋势</h2><p className="muted compact">{basisLabel} · {range==='24h'?'逐小时记录':'按账户时区统计，含今天'}</p></div><div className="consumption-ranges" role="group" aria-label="图表时间范围">{ranges.map(r=><button key={r} className={r===range?'active':''} aria-pressed={r===range} onClick={()=>onRange(r)}>{labels[r]}</button>)}</div></div>
+        {selected.loading&&!selected.data?<div className="consumption-loading" role="status"><div className="skeleton"/><span>正在读取消耗记录…</span></div>:!selected.data&&selected.error?<UsagePlaceholder kind="error" title="这个时间范围暂时无法加载" onRetry={onRefresh}/>:total===null?<UsagePlaceholder kind="empty" title="这段时间还没有消耗样本" onRetry={onRefresh}/>:<>
+          <div className="consumption-chart-meta"><span><i className="legend-sample"/>已记录的消耗</span><span><i className="legend-gap"/>无样本</span><span>单位：百分点（pp）</span></div>
+          <UsageChart key={range+':'+basis} points={series}/>
+          <div className="consumption-insights"><div><span>已记录消耗</span><strong>{total.toFixed(1)}<small> pp</small></strong></div><div><span>{range==='24h'?'有样本小时均值':'有样本日均'}</span><strong>{(total/known.length).toFixed(1)}<small> pp</small></strong></div><div><span>样本覆盖</span><strong>{known.length}<small> / {series.length} {range==='24h'?'小时':'天'}</small></strong></div></div>
+          {known.length<series.length&&<p className="muted compact">存在采集空档，合计只包含已记录部分；空档不代表零消耗。</p>}
+        </>}
+        {selected.data?.generated_at&&<p className={'consumption-updated'+(selected.error?' stale':'')}>{selected.error?'刷新失败，显示上次成功获取的数据':'数据更新于'} · {when(selected.data.generated_at)}</p>}
+      </section>
+    </>}
+    <p className="consumption-footnote"><Info size={15} aria-hidden="true"/><span>1 个百分点表示本窗口完整额度的 1%。不同额度窗口分别统计；重置不算消耗，真实零消耗才显示 0。</span></p>
+  </section>;
 }
-function peakOf(daily:UsageSeries[]){
- return daily.reduce((a,s)=>Math.max(a,s.consumed_pp||0),0);
+
+function UsagePlaceholder({kind,title,onRetry}:{kind:'error'|'empty';title:string;onRetry:()=>void}) {
+  const Icon=kind==='error'?CloudOff:Activity;
+  return <div className={'consumption-placeholder '+kind} role={kind==='error'?'alert':'status'}><span className="placeholder-icon"><Icon size={26} aria-hidden="true"/></span><h3>{title}</h3><p>{kind==='error'?'请检查服务器连接后重试。当前无法判断消耗量。':'电脑持续在线并完成采集后，这里会显示趋势。'}</p><div className="actions"><button className="btn" onClick={onRetry}><RefreshCw size={15} aria-hidden="true"/>{kind==='error'?'重新加载':'刷新数据'}</button><Link className="btn secondary" to="/connections">检查电脑连接</Link></div></div>;
 }
-function MiniBars({rows}:{rows:Hourly[]}){
- const scale=Math.max(1,...rows.map(r=>r.consumed_pp));
- const bw=Math.max(3,580/Math.max(1,rows.length)-2);
- return <div className="trend"><svg viewBox="0 0 600 90" role="img" aria-label="最近 24 小时逐小时消耗">{rows.map((r,i)=>{const cx=10+i*(580/rows.length)+bw/2;return <g key={r.hour}><title>{`${when(r.hour)}：${r.consumed_pp.toFixed(1)} pp`}</title><rect x={cx-bw/2} y={80-r.consumed_pp/scale*70} width={bw} height={Math.max(1,r.consumed_pp/scale*70)} fill="var(--accent)" opacity=".85"/></g>;})}</svg><div className="trend-axis"><span>{rows.length?when(rows[0].hour):""}</span><span>逐小时 pp</span><span>{rows.length?when(rows[rows.length-1].hour):""}</span></div></div>;
-}
-function WindowGenerations({gens}:{gens:UsageGeneration[]}){
- const all=gens.flatMap(g=>g.points);
- const start=Math.min(...all.map(p=>new Date(p.t).getTime())),end=Math.max(...all.map(p=>new Date(p.t).getTime()));
- const x=(t:string)=>10+(new Date(t).getTime()-start)/Math.max(1,end-start)*580;
- const y=(u:number)=>95-u*.8;
- return <div className="trend"><svg viewBox="0 0 600 110" role="img" aria-label="当前窗口已用额度趋势，纵轴 0 到 100%"><path d="M10 15H590 M10 55H590 M10 95H590" stroke="currentColor" opacity=".1"/>{gens.map((g,gi)=>g.points.length>=2?<polyline key={gi} fill="none" stroke="var(--accent)" strokeWidth="2.5" points={g.points.map(p=>`${x(p.t)},${y(p.used)}`).join(" ")}/>:<circle key={gi} cx={x(g.points[0].t)} cy={y(g.points[0].used)} r="3" fill="var(--accent)"/>)}<text x="12" y="12">100%</text><text x="12" y="108">0%</text></svg><div className="trend-axis"><span>{when(gens[0].start)}</span><span>已用额度 · 当前窗口（重置处分段）</span><span>{when(gens[gens.length-1].end)}</span></div></div>;
-}
-function BarChart({series,scale,granularity,reference,onTip,clearTip}:{series:UsageSeries[];scale:number;granularity:string;reference:number;onTip:(t:Tip)=>void;clearTip:()=>void}){
- const bw=Math.max(2,580/Math.max(1,series.length)-4);
- return <div className="trend"><svg viewBox="0 0 600 140" role="img" aria-label={`每个${granularity==="daily"?"日":granularity==="weekly"?"周":"月"}的额度消耗，纵轴按 ${scale.toFixed(0)} pp 缩放`}>
-  <path d="M10 20H590 M10 70H590 M10 120H590" stroke="currentColor" opacity=".1"/>
-  {reference>0&&reference<=scale&&<g><line x1="10" x2="590" y1={120-reference/scale*100} y2={120-reference/scale*100} stroke="var(--warn)" strokeDasharray="5 4" opacity=".8"/><text x="588" y={114-reference/scale*100} textAnchor="end" fontSize="10" fill="var(--warn)">参考 {reference.toFixed(1)} pp</text></g>}
-  {series.map((s,i)=>{
-   if(s.consumed_pp==null)return null;
-   const used=s.consumed_pp,over=reference>0&&used>reference,cy=120-used/scale*100,cx=10+i*(580/series.length)+bw/2;
-   return <g key={s.bucket_start} onMouseMove={e=>onTip({x:e.clientX,y:e.clientY,lines:[s.bucket_start,`消耗 ${used.toFixed(1)} pp`,s.resets?`重置 ${s.resets} 次`:"无重置",`覆盖 ${s.coverage_hours} 小时`]})} onMouseLeave={clearTip}><rect x={cx-bw/2} y={cy} width={bw} height={Math.max(1,used/scale*100)} fill={over?"var(--warn)":"var(--accent)"} opacity={s.coverage_hours===0?0.3:0.85}/>{s.resets?s.resets>0&&<text x={cx} y={cy-6} textAnchor="middle" fontSize="10">▲</text>:null}</g>;})}
-  <text x="12" y="14">{scale.toFixed(0)} pp</text>
- </svg>
- <div className="trend-axis"><span>{series[0]?.bucket_start||""}</span><span>消耗（百分点）· ▲ 重置</span><span>{series[series.length-1]?.bucket_start||""}</span></div></div>;
+
+function UsageChart({points}:{points:ChartPoint[]}) {
+  const [index,setIndex]=useState<number|null>(null);
+  const max=Math.max(1,...points.map(p=>p.value||0));
+  const scale=Math.ceil(max*1.15*10)/10;
+  const chosen=points[index??points.length-1];
+  return <div className="consumption-chart"><div className="consumption-plot"><div className="consumption-axis"><span>{scale.toFixed(1)}</span><span>{(scale/2).toFixed(1)}</span><span>0</span></div><div className="consumption-bars" style={{gridTemplateColumns:`repeat(${points.length},minmax(0,1fr))`}}>{points.map((p,i)=><button key={p.key} className={'consumption-bar'+(p.value===null?' missing':'')+(i===index?' highlighted':'')} onMouseEnter={()=>setIndex(i)} onFocus={()=>setIndex(i)} onClick={()=>setIndex(i)} aria-label={`${p.key}，${p.value===null?'无采集样本':`消耗 ${p.value.toFixed(1)} 个百分点，重置 ${p.resets} 次`}`}><span style={{height:p.value===null?'3px':`${Math.max(1,p.value/scale*100)}%`}}/>{p.resets>0&&<i aria-hidden="true">·</i>}</button>)}</div></div><div className="consumption-x-axis"><span>{points[0].label}</span><span>{points[Math.floor(points.length/2)].label}</span><span>{points.at(-1)!.label}</span></div><p className="consumption-selection" aria-live="polite"><strong>{chosen.label}</strong><span>{chosen.value===null?'暂无采集样本':`消耗 ${chosen.value.toFixed(1)} pp`}</span>{chosen.resets>0&&<span>重置 {chosen.resets} 次</span>}<small>点选柱条查看明细</small></p></div>;
 }

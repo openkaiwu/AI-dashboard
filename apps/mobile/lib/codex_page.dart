@@ -4,6 +4,8 @@ import 'package:flutter/services.dart';
 import 'api.dart';
 import 'store.dart';
 import 'theme.dart';
+import 'reminder_policy.dart';
+import 'consumption_panel.dart';
 
 const Map<String, String> planLabel = {
   'plus': 'Plus',
@@ -16,8 +18,13 @@ class CodexPage extends StatefulWidget {
   final HubApi api;
   final HubStore store;
   final String scope;
+  final VoidCallback? onConnections;
   const CodexPage(
-      {super.key, required this.api, required this.store, required this.scope});
+      {super.key,
+      required this.api,
+      required this.store,
+      required this.scope,
+      this.onConnections});
   @override
   State<CodexPage> createState() => _CodexPageState();
 }
@@ -25,25 +32,25 @@ class CodexPage extends StatefulWidget {
 class _CodexPageState extends State<CodexPage>
     with SingleTickerProviderStateMixin {
   Json? overview;
-  Json? consumptionDaily;
-  Json? consumptionHourly;
-  Json? consumptionWeekly;
-  Json? consumptionMonthly;
   String? error;
   bool busy = false;
   Timer? timer;
   late TabController tabs;
   String selectedDevice = '';
   String reminderFilter = 'pending';
+  bool alertBusy = false;
   double reservePercent = 10;
 
   @override
   void initState() {
     super.initState();
     tabs = TabController(length: 6, vsync: this);
+    tabs.addListener(() {
+      if (mounted) setState(() {});
+    });
     unawaited(load());
     timer =
-        Timer.periodic(const Duration(minutes: 5), (_) => unawaited(refresh()));
+        Timer.periodic(const Duration(minutes: 1), (_) => unawaited(refresh()));
   }
 
   @override
@@ -86,24 +93,6 @@ class _CodexPageState extends State<CodexPage>
     } finally {
       if (mounted) setState(() => busy = false);
     }
-    unawaited(loadConsumption());
-  }
-
-  // Best-effort fetches for the consumption panels; failures leave the
-  // panels showing their empty states without affecting the overview.
-  Future<void> loadConsumption() async {
-    for (final entry in [
-      ('daily&days=30', (Json j) => consumptionDaily = j),
-      ('hourly&hours=24', (Json j) => consumptionHourly = j),
-      ('weekly&compare=true', (Json j) => consumptionWeekly = j),
-      ('monthly', (Json j) => consumptionMonthly = j),
-    ]) {
-      try {
-        final data =
-            await widget.api.call('GET', '/api/v1/codex/consumption?granularity=${entry.$1}');
-        if (mounted) setState(() => entry.$2(data));
-      } catch (_) {}
-    }
   }
 
   Json? device() {
@@ -115,16 +104,27 @@ class _CodexPageState extends State<CodexPage>
         );
   }
 
+  bool get showsFiveHour => overview?['plan']?['plan_type'] == 'plus';
+
+  List<Json> visibleMetrics(Json? d) =>
+      ((d?['analysis']?['metrics'] as List?)?.cast<Json>() ?? [])
+          .where((m) => m['duration_minutes'] != 300 || showsFiveHour)
+          .toList();
+
   bool stale(Json? d) {
     if (error != null || d == null) return true;
     final snap = d['snapshot'] as Json?;
     if (snap == null || snap['status'] != 'ok') return true;
     final observed = DateTime.tryParse(snap['observed_at'] as String? ?? '');
     if (observed == null) return true;
-    return DateTime.now().difference(observed).inMinutes >= 11;
+    final age = DateTime.now().difference(observed);
+    return age > const Duration(minutes: 3) ||
+        age < const Duration(minutes: -2);
   }
 
   Future<void> alertAction(String id, String action) async {
+    if (alertBusy) return;
+    setState(() => alertBusy = true);
     try {
       await widget.api.call(
           'POST',
@@ -133,6 +133,8 @@ class _CodexPageState extends State<CodexPage>
       await refresh();
     } catch (_) {
       if (mounted) setState(() => error = '暂时无法更新提醒');
+    } finally {
+      if (mounted) setState(() => alertBusy = false);
     }
   }
 
@@ -153,6 +155,7 @@ class _CodexPageState extends State<CodexPage>
   String hours(num? value) {
     if (value == null) return '时间未知';
     if (value <= 0) return '等待重置确认';
+    if (value < 1) return '${(value * 60).ceil()} 分钟';
     if (value >= 24) return '${(value / 24).toStringAsFixed(1)} 天';
     return '${value.toStringAsFixed(1)} 小时';
   }
@@ -169,8 +172,12 @@ class _CodexPageState extends State<CodexPage>
 
   Widget hero(Json? d, bool isStale) {
     final state = isStale ? 'stale' : (d?['analysis']?['state'] ?? 'unknown');
-    final advice = (d?['analysis']?['advice'] as List?)?.cast<Json>() ?? [];
-    final top = advice.where((a) => a['kind'] != 'news').toList()
+    final advice = isStale
+        ? <Json>[]
+        : (d?['analysis']?['advice'] as List?)?.cast<Json>() ?? [];
+    final top = advice
+        .where((a) => a['kind'] == 'slow' || a['kind'] == 'use')
+        .toList()
       ..sort((a, b) => (b['priority'] as num).compareTo(a['priority'] as num));
     final labels = {
       'slow': '建议放慢',
@@ -190,25 +197,32 @@ class _CodexPageState extends State<CodexPage>
         ? const Color(0xfffff5e5)
         : state == 'stale'
             ? HubTheme.bg2
-            : const Color(0xfff0f6e9);
+            : HubTheme.accentDim;
     final border = state == 'slow'
         ? const Color(0xffead7b4)
         : state == 'stale'
             ? HubTheme.line
-            : const Color(0xffd6e3cb);
+            : const Color(0xffdce6ff);
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(22),
       decoration: BoxDecoration(
         color: color,
-        borderRadius: BorderRadius.circular(22),
+        borderRadius: BorderRadius.circular(16),
         border: Border.all(color: border),
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text('现在的建议 · ${labels[state] ?? state}',
-            style: TextStyle(
-                fontSize: 12,
-                color: state == 'slow' ? HubTheme.warn : HubTheme.accent)),
+        Row(children: [
+          Icon(Icons.verified_user_outlined,
+              size: 15,
+              color: state == 'slow' ? HubTheme.warn : HubTheme.accent),
+          const SizedBox(width: 7),
+          Text('现在的建议 · ${labels[state] ?? state}',
+              style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  color: state == 'slow' ? HubTheme.warn : HubTheme.accent)),
+        ]),
         const SizedBox(height: 10),
         Text(top.isNotEmpty ? top.first['title'] : labels[state],
             style: Theme.of(context).textTheme.headlineSmall),
@@ -222,8 +236,9 @@ class _CodexPageState extends State<CodexPage>
   Widget metricTile(Json m) {
     final remaining = (m['remaining'] as num).toDouble();
     final minutes = m['duration_minutes'] as int? ?? 0;
-    final title =
-        minutes % 1440 == 0 ? '${minutes ~/ 1440} 天额度' : '${minutes / 60} 小时额度';
+    final title = minutes % 1440 == 0
+        ? '${minutes ~/ 1440} 天额度'
+        : '${(minutes / 60).toString().replaceAll(RegExp(r"\.0$"), "")} 小时额度';
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(20),
@@ -234,9 +249,10 @@ class _CodexPageState extends State<CodexPage>
                 style: Theme.of(context).textTheme.labelSmall),
           ]),
           const SizedBox(height: 18),
-          Text('${remaining.toStringAsFixed(0)}%',
+          Text(ReminderPolicy.remainingLabel(remaining),
               style: const TextStyle(
-                  fontSize: 52,
+                  fontSize: 48,
+                  fontWeight: FontWeight.w600,
                   height: 1,
                   letterSpacing: -2,
                   color: HubTheme.ink)),
@@ -267,7 +283,7 @@ class _CodexPageState extends State<CodexPage>
           Text(
               m['rate_per_hour'] == null
                   ? '样本不足，暂不预测耗尽时间'
-                  : '近期消耗 ${(m['rate_per_hour'] as num).toStringAsFixed(1)} 个百分点 / 小时',
+                  : '近一小时消耗 ${(m['rate_per_hour'] as num).toStringAsFixed(1)} 个百分点 / 小时',
               style: Theme.of(context).textTheme.labelSmall),
         ]),
       ),
@@ -284,7 +300,8 @@ class _CodexPageState extends State<CodexPage>
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 Text('备用重置卡', style: TextStyle(color: HubTheme.muted)),
-                Text('↺', style: TextStyle(color: HubTheme.accent)),
+                Icon(Icons.confirmation_number_outlined,
+                    size: 20, color: HubTheme.accent),
               ]),
           const SizedBox(height: 16),
           Text(credits == null ? '—' : '${credits['available_count']}',
@@ -335,7 +352,7 @@ class _CodexPageState extends State<CodexPage>
         ),
       );
     }
-    final metrics = (d?['analysis']?['metrics'] as List?)?.cast<Json>() ?? [];
+    final metrics = visibleMetrics(d);
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       hero(d, isStale),
       const SizedBox(height: 16),
@@ -345,7 +362,7 @@ class _CodexPageState extends State<CodexPage>
   }
 
   Widget planTab(Json? d, bool isStale) {
-    final metrics = (d?['analysis']?['metrics'] as List?)?.cast<Json>() ?? [];
+    final metrics = visibleMetrics(d);
     final credits =
         (d?['snapshot']?['reset_credits']?['items'] as List?)?.cast<Json>() ??
             [];
@@ -457,12 +474,12 @@ class _CodexPageState extends State<CodexPage>
   }
 
   Widget radarTab(Json? d, Json? overview) {
-    final metrics = (d?['analysis']?['metrics'] as List?)?.cast<Json>() ?? [];
+    final metrics = visibleMetrics(d);
     final news = (d?['snapshot']?['news'] ?? overview?['news']) as Json?;
     final items = (news?['items'] as List?)?.cast<Json>() ?? [];
     final checkedAt = DateTime.tryParse(news?['checked_at']?.toString() ?? '');
-    final expired =
-        checkedAt == null || DateTime.now().difference(checkedAt).inMinutes >= 45;
+    final expired = checkedAt == null ||
+        DateTime.now().difference(checkedAt).inMinutes >= 45;
     final status = news == null
         ? '尚未检查'
         : expired
@@ -482,8 +499,7 @@ class _CodexPageState extends State<CodexPage>
       if (metrics.every((m) => m['resets_at'] == null))
         const Text('暂无可核实的重置时间。'),
       const SizedBox(height: 16),
-      Text('Tibo 重置消息 · 自动检查',
-          style: Theme.of(context).textTheme.titleMedium),
+      Text('Tibo 重置消息 · 自动检查', style: Theme.of(context).textTheme.titleMedium),
       Text(status,
           style: TextStyle(
               color: expired || news?['status'] != 'checked'
@@ -514,15 +530,7 @@ class _CodexPageState extends State<CodexPage>
     ]);
   }
 
-  String alertState(Json a) {
-    if (a['dismissed'] == true) return 'dismissed';
-    final snooze = a['snoozed_until'];
-    if (snooze != null &&
-        DateTime.parse(snooze as String).isAfter(DateTime.now())) {
-      return 'snoozed';
-    }
-    return 'pending';
-  }
+  String alertState(Json a) => ReminderPolicy.alertState(a, DateTime.now());
 
   Widget remindersTab() {
     final alerts = (overview?['alerts'] as List?)?.cast<Json>() ?? [];
@@ -550,6 +558,7 @@ class _CodexPageState extends State<CodexPage>
       Wrap(spacing: 8, children: [
         for (final entry in [
           ['pending', '待处理'],
+          ['read', '已读'],
           ['snoozed', '稍后提醒'],
           ['dismissed', '已忽略'],
         ])
@@ -579,18 +588,32 @@ class _CodexPageState extends State<CodexPage>
                     style: Theme.of(context).textTheme.titleMedium),
                 const SizedBox(height: 8),
                 Text(a['advice']['body']),
+                Text(
+                    '${a['advice']['source_name'] == null ? '' : '来源：${a['advice']['source_name']} · '}${a['advice']['interrupt'] == false ? '页面建议' : '重要提醒'}',
+                    style: Theme.of(context).textTheme.labelSmall),
                 const SizedBox(height: 8),
                 Wrap(spacing: 8, children: [
                   if (reminderFilter == 'pending') ...[
+                    FilledButton(
+                        onPressed: alertBusy
+                            ? null
+                            : () => alertAction(a['id'], 'read'),
+                        child: const Text('已读')),
                     OutlinedButton(
-                        onPressed: () => alertAction(a['id'], 'snooze'),
+                        onPressed: alertBusy
+                            ? null
+                            : () => alertAction(a['id'], 'snooze'),
                         child: const Text('1 小时后提醒')),
                     TextButton(
-                        onPressed: () => alertAction(a['id'], 'dismiss'),
+                        onPressed: alertBusy
+                            ? null
+                            : () => alertAction(a['id'], 'dismiss'),
                         child: const Text('忽略本次')),
                   ] else
                     OutlinedButton(
-                        onPressed: () => alertAction(a['id'], 'restore'),
+                        onPressed: alertBusy
+                            ? null
+                            : () => alertAction(a['id'], 'restore'),
                         child: const Text('恢复到待处理')),
                 ]),
               ],
@@ -600,179 +623,11 @@ class _CodexPageState extends State<CodexPage>
     ]);
   }
 
-
-  Widget consumptionTab() {
-    final planType =
-        (overview?['plan']?['plan_type'] ?? 'unknown') as String;
-    final fiveCapable = planType == 'plus' || planType == 'pro';
-    double? fiveUsed;
-    double? weeklyUsed;
-    for (final d in (overview?['devices'] ?? []) as List) {
-      for (final b in ((d as Json)['snapshot']?['buckets'] ?? []) as List) {
-        final w = (b as Json)['primary'] as Json?;
-        if (w == null) continue;
-        final dur = (w['duration_minutes'] as num).toInt();
-        final used = (w['used_percent'] as num?)?.toDouble();
-        if (dur == 300 && fiveUsed == null) fiveUsed = used;
-        if (dur == 10080 && weeklyUsed == null) weeklyUsed = used;
-      }
-    }
-    final daily =
-        ((consumptionDaily?['series'] ?? []) as List).cast<Json>();
-    final hourly =
-        ((consumptionHourly?['hourly'] ?? []) as List).cast<Json>();
-    final compare = consumptionWeekly?['compare'] as Json?;
-    final monthly =
-        ((consumptionMonthly?['series'] ?? []) as List).cast<Json>();
-    double sumRows(List<Json> rows) =>
-        rows.fold(0.0, (a, r) => a + ((r['consumed_pp'] as num?) ?? 0));
-    final last24 =
-        hourly.fold(0.0, (a, h) => a + ((h['consumed_pp'] as num?) ?? 0));
-    final last7 =
-        daily.length >= 7 ? daily.sublist(daily.length - 7) : daily;
-    return Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Text('消耗分析', style: Theme.of(context).textTheme.titleMedium),
-          const Text('四个时间维度的额度消耗；重置不算消耗，空档表示无样本。'),
-          const SizedBox(height: 12),
-          Card(
-              child: Padding(
-                  padding: const EdgeInsets.all(14),
-                  child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text('五小时窗口（实时）',
-                            style: Theme.of(context).textTheme.titleSmall),
-                        const SizedBox(height: 6),
-                        if (fiveCapable && fiveUsed != null) ...[
-                          Text('${(100 - fiveUsed).toStringAsFixed(0)}% 剩余',
-                              style: Theme.of(context)
-                                  .textTheme
-                                  .headlineSmall),
-                          const Text('触顶预测与重置倒计时见桌面端；本机采集为准。'),
-                        ] else if (fiveCapable)
-                          const Text('Codex 暂未返回五小时窗口。')
-                        else
-                          Text(
-                              '当前套餐（${planLabel[planType] ?? planType}）未上报五小时窗口。'),
-                      ]))),
-          Card(
-              child: Padding(
-                  padding: const EdgeInsets.all(14),
-                  child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text('一天 · 近 24 小时',
-                            style: Theme.of(context).textTheme.titleSmall),
-                        Text('${last24.toStringAsFixed(1)} pp',
-                            style: Theme.of(context)
-                                .textTheme
-                                .headlineSmall),
-                        const SizedBox(height: 6),
-                        for (final h in hourly.skip(
-                            hourly.length > 6 ? hourly.length - 6 : 0))
-                          Padding(
-                              padding:
-                                  const EdgeInsets.symmetric(vertical: 2),
-                              child: Row(children: [
-                                SizedBox(
-                                    width: 110,
-                                    child: Text(when(h['hour'].toString()),
-                                        style:
-                                            const TextStyle(fontSize: 11))),
-                                Expanded(
-                                    child: LinearProgressIndicator(
-                                        value: ((h['consumed_pp']
-                                                        as num?) ??
-                                                    0) /
-                                                100,
-                                        minHeight: 6)),
-                                SizedBox(
-                                    width: 58,
-                                    child: Text(
-                                        '${((h['consumed_pp'] as num?) ?? 0).toStringAsFixed(1)} pp',
-                                        textAlign: TextAlign.right,
-                                        style: const TextStyle(
-                                            fontSize: 11))),
-                              ])),
-                        if (hourly.isEmpty)
-                          const Text('最近 24 小时暂无小时样本。'),
-                      ]))),
-          Card(
-              child: Padding(
-                  padding: const EdgeInsets.all(14),
-                  child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text('一周 · 近 7 天',
-                            style: Theme.of(context).textTheme.titleSmall),
-                        Text('${sumRows(last7).toStringAsFixed(1)} pp',
-                            style: Theme.of(context)
-                                .textTheme
-                                .headlineSmall),
-                        const SizedBox(height: 6),
-                        for (final r in last7)
-                          Padding(
-                              padding:
-                                  const EdgeInsets.symmetric(vertical: 2),
-                              child: Row(children: [
-                                SizedBox(
-                                    width: 76,
-                                    child: Text(
-                                        r['bucket_start']
-                                            .toString()
-                                            .substring(5),
-                                        style:
-                                            const TextStyle(fontSize: 11))),
-                                Expanded(
-                                    child: LinearProgressIndicator(
-                                        value: ((r['consumed_pp']
-                                                        as num?) ??
-                                                    0) /
-                                                100,
-                                        minHeight: 6)),
-                                SizedBox(
-                                    width: 58,
-                                    child: Text(
-                                        '${((r['consumed_pp'] as num?) ?? 0).toStringAsFixed(1)} pp',
-                                        textAlign: TextAlign.right,
-                                        style: const TextStyle(
-                                            fontSize: 11))),
-                              ])),
-                        if (weeklyUsed != null)
-                          Padding(
-                              padding: const EdgeInsets.only(top: 6),
-                              child: Text(
-                                  '周窗口（Codex 原生）：已用 ${weeklyUsed.toStringAsFixed(0)}% —— 与"近 7 天消耗"口径不同。')),
-                        if (compare != null)
-                          Text(
-                              '本日历周 ${((compare['this_pp'] as num?) ?? 0).toStringAsFixed(1)} pp · 上周同期 ${((compare['prev_pp'] as num?) ?? 0).toStringAsFixed(1)} pp'),
-                      ]))),
-          Card(
-              child: Padding(
-                  padding: const EdgeInsets.all(14),
-                  child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text('一月 · 近 30 天',
-                            style: Theme.of(context).textTheme.titleSmall),
-                        Text('${sumRows(daily).toStringAsFixed(1)} pp',
-                            style: Theme.of(context)
-                                .textTheme
-                                .headlineSmall),
-                        const SizedBox(height: 6),
-                        if (monthly.isEmpty)
-                          const Text('月度数据积累中。')
-                        else
-                          for (final m in monthly)
-                            Text(
-                                '${m['bucket_start'].toString().substring(0, 7)}：${m['consumed_pp'] == null ? "积累中" : "${(m['consumed_pp'] as num).toStringAsFixed(1)} pp"}'),
-                        Text(
-                            '30 天日均 ${(sumRows(daily) / (daily.isEmpty ? 1 : daily.length)).toStringAsFixed(1)} pp · 覆盖 ${daily.length} 天。'),
-                      ]))),
-        ]);
-  }
+  Widget consumptionTab() => ConsumptionPanel(
+        api: widget.api,
+        plan: overview?['plan']?['plan_type'] as String? ?? 'unknown',
+        onConnections: () => widget.onConnections?.call(),
+      );
 
   Widget settingsTab() {
     final prefs = overview?['preferences'] as Json?;
@@ -785,7 +640,7 @@ class _CodexPageState extends State<CodexPage>
         items: const [
           DropdownMenuItem(value: 'unknown', child: Text('未知')),
           DropdownMenuItem(value: 'plus', child: Text('Plus · 显示五小时额度')),
-          DropdownMenuItem(value: 'pro', child: Text('Pro · 显示五小时额度（上限更高）')),
+          DropdownMenuItem(value: 'pro', child: Text('Pro · 按周窗口显示')),
           DropdownMenuItem(value: 'prolite', child: Text('Pro Lite · 按周窗口显示')),
         ],
         onChanged: (value) async {
@@ -800,7 +655,8 @@ class _CodexPageState extends State<CodexPage>
         },
       ),
       const SizedBox(height: 8),
-      const Text('规则跨端保存。强提醒在手机上以弹窗显示；应用在后台时从屏幕顶部弹出。'),
+      const Text(
+          '规则和处理状态跨端保存。额度风险与卡片到期可弹出；多用建议和外部消息仅在页面显示。已读后本次事件不再提醒。后台通知依赖应用仍在运行。'),
       const SizedBox(height: 16),
       if (prefs != null)
         SwitchListTile(
@@ -818,7 +674,6 @@ class _CodexPageState extends State<CodexPage>
           ('low_percent', '低额度提醒 · 剩余不超过 %', 1, 30),
           ('pace_lead', '超前消耗 · 百分点', 5, 70),
           ('credit_hours', '重置卡到期前 · 小时', 1, 168),
-          ('cooldown_hours', '重复提醒间隔 · 小时', 1, 48),
           ('quiet_start', '免打扰开始 · 当地时', 0, 23),
           ('quiet_end', '免打扰结束 · 当地时', 0, 23),
           ('utc_offset_minutes', '时区 · UTC 偏移分钟', -720, 840),
@@ -840,10 +695,11 @@ class _CodexPageState extends State<CodexPage>
     final isStale = stale(d);
     final devices = (overview?['devices'] as List?)?.cast<Json>() ?? [];
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-      eyebrow('Codex / Personal Companion'),
-      Text('让额度跟上你的节奏', style: Theme.of(context).textTheme.headlineMedium),
+      eyebrow('CODEX WORKSPACE'),
+      Text(const ['额度总览', '使用计划', '提醒中心', '重置雷达', '消耗分析', '提醒设置'][tabs.index],
+          style: Theme.of(context).textTheme.headlineMedium),
       const SizedBox(height: 6),
-      const Text('每 5 分钟接收电脑额度摘要；登录凭据和对话留在电脑。'),
+      Text(tabs.index == 4 ? '查看消耗趋势，了解你的使用节奏。' : '掌握剩余额度，从容安排下一步。'),
       const SizedBox(height: 16),
       Row(children: [
         Container(
@@ -862,20 +718,27 @@ class _CodexPageState extends State<CodexPage>
           ),
         ),
         if (devices.length > 1)
-          DropdownButton<String>(
-            value:
-                selectedDevice.isEmpty ? devices.first['id'] : selectedDevice,
-            items: [
-              for (final item in devices)
-                DropdownMenuItem(
-                    value: item['id'] as String,
-                    child: Text(item['name'] as String)),
-            ],
-            onChanged: (v) => setState(() => selectedDevice = v ?? ''),
-          ),
-        TextButton(
-            onPressed: busy ? null : refresh,
-            child: Text(busy ? '同步中…' : '↻ 刷新')),
+          ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 120),
+              child: DropdownButton<String>(
+                isExpanded: true,
+                value: selectedDevice.isEmpty
+                    ? devices.first['id']
+                    : selectedDevice,
+                items: [
+                  for (final item in devices)
+                    DropdownMenuItem(
+                        value: item['id'] as String,
+                        child: Text(item['name'] as String,
+                            overflow: TextOverflow.ellipsis)),
+                ],
+                onChanged: (v) => setState(() => selectedDevice = v ?? ''),
+              )),
+        if (tabs.index != 4)
+          TextButton.icon(
+              onPressed: busy ? null : refresh,
+              icon: const Icon(Icons.refresh_rounded, size: 17),
+              label: Text(busy ? '同步中…' : '刷新')),
       ]),
       if (error != null)
         Padding(
@@ -905,7 +768,9 @@ class _CodexPageState extends State<CodexPage>
         child: TabBarView(
           controller: tabs,
           children: [
-            ListView(children: [overviewTab(d, isStale)]),
+            ListView(
+                padding: const EdgeInsets.only(bottom: 20),
+                children: [overviewTab(d, isStale)]),
             ListView(children: [planTab(d, isStale)]),
             ListView(children: [remindersTab()]),
             ListView(children: [radarTab(d, overview)]),

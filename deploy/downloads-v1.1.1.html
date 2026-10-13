@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>AI Hub 正式版 v1.1.1 下载</title>
+  <style>
+    body{font-family:system-ui,sans-serif;max-width:720px;margin:40px auto;padding:0 18px;line-height:1.7;color:#202820;background:#fafbf8}
+    h2{margin-top:30px}a{color:#406d2b}.btn{display:block;margin:16px 0;padding:18px;background:#477526;color:white;border-radius:12px;text-decoration:none;font-size:20px}.btn small{display:block;font-size:14px;margin-top:6px}.muted{color:#65705f;font-size:14px}li{margin:8px 0}code{overflow-wrap:anywhere}
+  </style>
+</head>
+<body>
+  <h1>AI Hub 正式版 v1.1.1</h1>
+  <p>Windows 与 Android 最新版本 · 2026-10-08</p>
+  <p>同一事件只自动提醒一次；只有主动选择稍后提醒、进入新周期或风险升级时再次提示。提醒处理状态跨端同步。</p>
+  <a class="btn" data-download href="/downloads/AIHub-%E6%AD%A3%E5%BC%8F%E7%89%88v1.1.1.exe">Windows 正式版 v1.1.1<small>Windows 10/11 · x64 安装包 · 支持覆盖更新</small></a>
+  <a class="btn" data-download href="/downloads/AIHub-%E6%AD%A3%E5%BC%8F%E7%89%88v1.1.1.apk">Android 正式版 v1.1.1<small>Android APK · 版本 1.1.1 · 构建号 5 · 支持覆盖更新</small></a>
+  <h2>电脑采集器</h2>
+  <a class="btn" data-download href="/downloads/AIHub-Codex-Collector-Windows-latest.zip">Windows Codex/Cursor 采集器（最新版）<small>独立更新包 · 每分钟采集 · 解压后放入新生成的 bridge.json</small></a>
+  <p class="muted">新安装后，在客户端输入管理员提供的 HTTPS 服务器地址并登录。已有配置与登录凭据保存在本机。</p>
+  <h2>文件校验</h2>
+  <p><a data-download href="/downloads/SHA256SUMS-v1.1.1.txt">下载 SHA-256 校验清单</a></p>
+  <p class="muted">Windows：<code>certutil -hashfile 文件名 SHA256</code><br>macOS / Linux：<code>shasum -a 256 文件名</code></p>
+  <h2>其他平台旧版本</h2>
+  <p class="muted">以下仍为 v1.0，未包含本次提醒逻辑更新。</p>
+  <ul>
+    <li><a data-download href="/downloads/desktop/aihub-desktop-windows-x64.zip">Windows v1.0 便携版</a></li>
+    <li><a data-download href="/downloads/desktop/AIHub-1.0.0-x86_64.AppImage">Linux v1.0 AppImage</a></li>
+    <li><a data-download href="/downloads/desktop/AIHub-1.0.0-amd64.deb">Linux v1.0 deb</a></li>
+    <li><a data-download href="/downloads/desktop/AIHub-1.0.0-arm64.dmg">macOS v1.0 dmg（未签名）</a></li>
+    <li><a data-download href="/downloads/mobile/AIHub-1.0.0-unsigned.ipa">iOS v1.0 ipa（未签名）</a></li>
+  </ul>
+  <script>
+    const downloads = new URL('/downloads/', window.location.href);
+    downloads.protocol = 'http:';
+    downloads.port = '8888';
+    document.querySelectorAll('a[data-download]').forEach(link => {
+      link.href = new URL(link.getAttribute('href').replace(/^\/downloads\//, ''), downloads).href;
+    });
+  </script>
+</body>
+</html>
