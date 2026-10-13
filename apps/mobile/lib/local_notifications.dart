@@ -27,9 +27,12 @@ class LocalNotifications {
           DarwinNotificationCategory(
             categoryId,
             actions: [
-              DarwinNotificationAction.plain('read', '已读', options: {DarwinNotificationActionOption.foreground}),
-              DarwinNotificationAction.plain('snooze', '1 小时后提醒', options: {DarwinNotificationActionOption.foreground}),
-              DarwinNotificationAction.plain('dismiss', '忽略本次', options: {DarwinNotificationActionOption.foreground}),
+              DarwinNotificationAction.plain('read', '已读',
+                  options: {DarwinNotificationActionOption.foreground}),
+              DarwinNotificationAction.plain('snooze', '1 小时后提醒',
+                  options: {DarwinNotificationActionOption.foreground}),
+              DarwinNotificationAction.plain('dismiss', '忽略本次',
+                  options: {DarwinNotificationActionOption.foreground}),
             ],
           ),
         ],
@@ -78,13 +81,18 @@ class LocalNotifications {
     if (!_ready) return false;
     try {
       if (Platform.isAndroid) {
-        final android = _plugin.resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
+        final android = _plugin.resolvePlatformSpecificImplementation<
+            AndroidFlutterLocalNotificationsPlugin>();
         if (await android?.areNotificationsEnabled() != true) return false;
       }
       if (Platform.isIOS) {
-        final ios = _plugin.resolvePlatformSpecificImplementation<IOSFlutterLocalNotificationsPlugin>();
+        final ios = _plugin.resolvePlatformSpecificImplementation<
+            IOSFlutterLocalNotificationsPlugin>();
         final permission = await ios?.checkPermissions();
-        if (permission?.isEnabled != true && permission?.isProvisionalEnabled != true) return false;
+        if (permission?.isEnabled != true &&
+            permission?.isProvisionalEnabled != true) {
+          return false;
+        }
       }
       final details = NotificationDetails(
         android: AndroidNotificationDetails(

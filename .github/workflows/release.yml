@@ -1,21 +1,24 @@
 name: Release Packages
 on:
   workflow_dispatch:
+    inputs:
+      target:
+        description: Platforms to build
+        type: choice
+        default: all
+        options: [all, macos, ios]
   push:
     tags: ['v*']
 permissions:
   contents: read
 jobs:
   desktop:
+    if: ${{ inputs.target != 'ios' }}
     name: Desktop ${{ matrix.platform }} ${{ matrix.arch }}
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - {runner: ubuntu-24.04, platform: linux, arch: x64, goarch: amd64}
-          - {runner: ubuntu-24.04-arm, platform: linux, arch: arm64, goarch: arm64}
-          - {runner: macos-15, platform: darwin, arch: arm64, goarch: arm64}
-          - {runner: macos-15-intel, platform: darwin, arch: x64, goarch: amd64}
+        include: ${{ fromJSON(inputs.target == 'macos' && '[{"runner":"macos-15","platform":"darwin","arch":"arm64","goarch":"arm64"},{"runner":"macos-15-intel","platform":"darwin","arch":"x64","goarch":"amd64"}]' || '[{"runner":"ubuntu-24.04","platform":"linux","arch":"x64","goarch":"amd64"},{"runner":"ubuntu-24.04-arm","platform":"linux","arch":"arm64","goarch":"arm64"},{"runner":"macos-15","platform":"darwin","arch":"arm64","goarch":"arm64"},{"runner":"macos-15-intel","platform":"darwin","arch":"x64","goarch":"amd64"}]') }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 35
     steps:
@@ -71,6 +74,7 @@ jobs:
           path: artifacts/release/${{ matrix.platform }}-${{ matrix.arch }}/
           if-no-files-found: error
   ios:
+    if: ${{ inputs.target != 'macos' }}
     name: iOS device IPA (requires user signing)
     runs-on: macos-15
     timeout-minutes: 35
