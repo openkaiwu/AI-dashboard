@@ -8,7 +8,8 @@ const source='artifacts/desktop/installer',destination=`artifacts/release/${plat
 const names=platform==='linux'?[`AIHub-${version}-linux-${arch}.AppImage`,`AIHub-${version}-linux-${arch}.deb`]:[`AIHub-${version}-${arch}.dmg`,`AIHub-${version}-${arch}.zip`];
 fs.mkdirSync(destination,{recursive:true});
 for(const name of names){
- const file=path.join(source,name);
+ const sourceName=platform==='linux'&&arch==='x64'?name.replace('-x64.AppImage','-x86_64.AppImage').replace('-x64.deb','-amd64.deb'):name;
+ const file=path.join(source,sourceName);
  if(fs.statSync(file).size<1000000)throw Error('Invalid package: '+file);
  fs.copyFileSync(file,path.join(destination,name));
 }

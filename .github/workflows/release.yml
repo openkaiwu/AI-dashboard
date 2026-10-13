@@ -6,7 +6,7 @@ on:
         description: Platforms to build
         type: choice
         default: all
-        options: [all, macos, ios]
+        options: [all, desktop, macos, ios]
   push:
     tags: ['v*']
 permissions:
@@ -74,7 +74,7 @@ jobs:
           path: artifacts/release/${{ matrix.platform }}-${{ matrix.arch }}/
           if-no-files-found: error
   ios:
-    if: ${{ inputs.target != 'macos' }}
+    if: ${{ inputs.target != 'macos' && inputs.target != 'desktop' }}
     name: iOS device IPA (requires user signing)
     runs-on: macos-15
     timeout-minutes: 35

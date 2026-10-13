@@ -16,6 +16,21 @@ while read -r checksum name; do
 done < SHA256SUMS.txt
 [[ ${#files[@]} -gt 0 && -s downloads.html ]] || { echo 'Empty release'; exit 1; }
 sha256sum -c SHA256SUMS.txt
+python3 - "$version" <<'PY'
+import html.parser, pathlib, sys, urllib.parse
+version = sys.argv[1]
+files = {line.split(None, 1)[1].strip() for line in pathlib.Path('SHA256SUMS.txt').read_text().splitlines()}
+aliases = {'SHA256SUMS-latest.txt', f'SHA256SUMS-v{version}.txt', 'desktop/AIHub-Setup.exe', f'desktop/AIHub-Setup-{version}.exe', 'aihub-mobile.apk'}
+class Links(html.parser.HTMLParser):
+    def handle_starttag(self, tag, attrs):
+        attrs = dict(attrs)
+        if tag != 'a' or 'data-download' not in attrs:
+            return
+        href = urllib.parse.unquote(attrs.get('href', ''))
+        if not href.startswith('/downloads/') or href[len('/downloads/'):] not in files | aliases:
+            raise SystemExit('Unverified download link: ' + href)
+Links().feed(pathlib.Path('downloads.html').read_text())
+PY
 for required in "AIHub-正式版v$version.exe" "AIHub-正式版v$version.apk"; do
   printf '%s\n' "${files[@]}" | grep -Fxq "$required" || { echo "Missing required package: $required"; exit 1; }
 done
