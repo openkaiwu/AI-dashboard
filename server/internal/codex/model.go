@@ -5,6 +5,7 @@ import (
 	"errors"
 	"math"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 )
@@ -70,9 +71,40 @@ type NewsItem struct {
 	Summary         string    `json:"summary"`
 }
 type News struct {
-	CheckedAt time.Time  `json:"checked_at"`
-	Status    string     `json:"status"`
-	Items     []NewsItem `json:"items"`
+	LastSuccessAt *time.Time `json:"last_success_at,omitempty"`
+	CheckedAt     time.Time  `json:"checked_at"`
+	Status        string     `json:"status"`
+	Items         []NewsItem `json:"items"`
+}
+
+// Preserve the last verified items when a check fails, without describing the
+// failed check as successful. URLs identify events, so polling cannot duplicate them.
+func MergeNews(next News, previous *News) News {
+	if next.Status == "checked" {
+		at := next.CheckedAt
+		next.LastSuccessAt = &at
+	} else if previous != nil {
+		next.Items = previous.Items
+		next.LastSuccessAt = previous.LastSuccessAt
+		if next.LastSuccessAt == nil && previous.Status == "checked" {
+			at := previous.CheckedAt
+			next.LastSuccessAt = &at
+		}
+	}
+	seen := map[string]bool{}
+	items := []NewsItem{}
+	for _, item := range next.Items {
+		if !seen[item.URL] {
+			seen[item.URL] = true
+			items = append(items, item)
+		}
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].PublishedAt.After(items[j].PublishedAt) })
+	if len(items) > 10 {
+		items = items[:10]
+	}
+	next.Items = items
+	return next
 }
 
 func (n News) Validate(now time.Time) bool {

@@ -52,7 +52,22 @@ func (s *Server) Handler() http.Handler {
 	bridgeService := &connector.Service{DB: s.db, AfterQuotaWrite: func(ctx context.Context, uid string) error {
 		return s.evaluateUser(ctx, uid)
 	}}
+	mux.Handle("POST /api/v1/mobile/background-token", authService.Middleware(authService.BackgroundToken))
+	mux.Handle("DELETE /api/v1/mobile/background-token", authService.Middleware(authService.BackgroundToken))
+	for _, route := range []string{"GET", "POST", "PUT"} {
+		mux.Handle(route+" /api/v1/mobile/reminders", authService.Middleware(bridgeService.MobileReminders))
+		mux.Handle(route+" /api/v1/background/reminders", authService.Background(bridgeService.MobileReminders))
+	}
+	mux.Handle("GET /api/v1/background/overview", authService.Background(bridgeService.Overview))
+	mux.Handle("GET /api/v1/background/local-data", authService.Background(bridgeService.LocalData))
+	mux.Handle("POST /api/v1/background/alerts/{id}/delivery", authService.Background(bridgeService.Delivery))
+	mux.Handle("GET /api/v1/background/notifications", authService.Background(func(w http.ResponseWriter, r *http.Request) {
+		s.listNotifications(w, r.WithContext(context.WithValue(r.Context(), userIDKey, auth.Who(r).UserID)))
+	}))
+	mux.Handle("GET /api/v1/local-data", authService.Middleware(bridgeService.LocalData))
+	mux.Handle("PUT /api/v1/local-data", authService.Middleware(bridgeService.LocalData))
 	mux.Handle("GET /api/v1/codex/overview", authService.Middleware(bridgeService.Overview))
+	mux.Handle("GET /api/v1/codex/radar", authService.Middleware(bridgeService.RadarStatus))
 	mux.Handle("GET /api/v1/codex/consumption", authService.Middleware(bridgeService.Consumption))
 	mux.Handle("GET /api/v1/codex/plan", authService.Middleware(bridgeService.Plan))
 	mux.Handle("PUT /api/v1/codex/plan", authService.Middleware(bridgeService.Plan))

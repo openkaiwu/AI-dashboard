@@ -1,6 +1,6 @@
 {
   "name": "aihub-desktop",
-  "version": "1.1.4",
+  "version": "1.1.7",
   "description": "AI Hub Codex quota companion",
   "homepage": "http://127.0.0.1:8080",
   "author": {
@@ -106,7 +106,9 @@
         "en_US"
       ],
       "artifactName": "AIHub-正式版v${version}.${ext}",
-      "runAfterFinish": true
+      "runAfterFinish": true,
+      "include": "installer.nsh",
+      "deleteAppDataOnUninstall": false
     }
   }
 }

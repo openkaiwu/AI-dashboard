@@ -154,16 +154,17 @@ func TestAdvisorQuietHoursAndRiskSnooze(t *testing.T) {
 		t.Fatal("quiet end failed to arm active event", alert)
 	}
 	id := alert["id"].(string)
+	originalGeneration := alert["notified_at"]
 	call(t, ts, "POST", "/api/v1/codex/alerts/"+url.PathEscape(id), token, map[string]string{"action": "snooze"})
 	_, out = call(t, ts, "GET", "/api/v1/codex/overview", token, nil)
-	if out["alerts"].([]any)[0].(map[string]any)["notified_at"] != nil {
-		t.Fatal("snoozed event rearmed early")
+	if out["alerts"].([]any)[0].(map[string]any)["notified_at"] != originalGeneration {
+		t.Fatal("list action changed presentation generation")
 	}
 	if _, err := database.Exec(`UPDATE codex_alerts SET snoozed_until=now()-interval '1 second' WHERE id=$1`, id); err != nil {
 		t.Fatal(err)
 	}
 	_, out = call(t, ts, "GET", "/api/v1/codex/overview", token, nil)
-	if out["alerts"].([]any)[0].(map[string]any)["notified_at"] == nil {
-		t.Fatal("one-hour snooze still waiting for six-hour cooldown")
+	if out["alerts"].([]any)[0].(map[string]any)["notified_at"] != originalGeneration {
+		t.Fatal("snooze expiry manufactured another generation")
 	}
 }

@@ -1,10 +1,18 @@
-# AI Hub · M0 Foundation
+# AI Hub · 跨设备额度与提醒工作台
 
 公开仓库中的 `hub.example.com` 与 `203.0.113.10` 均为脱敏示例地址。实际服务器地址、账户和连接凭据只应在本机配置，不能写入源码或构建参数。
 
 电脑与手机共享的自部署 AI 工作空间。以 AI-dashboard 的 Go/React 额度看板为基础，
 参考 codex-quota-band 的设备同步与隐私边界，按 Linear M0 实现 PostgreSQL + Flutter/Drift + 增量同步。
 不包含小米手环功能。
+
+## 最新进展 · v1.1.7
+
+本次聚焦数据可信度和可靠同步：同一上传重试不重复入库、旧设备晚上传不回退新数据、每小时单源统计避免多设备翻倍；桌面上传队列支持断网补传。Windows/Web 与 Android 消耗图显示真实观察时间和来源，未知采集时间明确标注。
+
+桌面默认静默，手机保持同一事件一次提醒及至少 30 分钟间隔。Windows 未签名、Android 沿用现有调试证书；后台检查受系统调度约束，尚未接入实时推送。A0 与 A1 核心已实施，A1 其他收尾及 A2–A5/B/C 按实施记录保持未完成。
+
+详见 [v1.1.7 发布记录](docs/RELEASE_V1_1_7_ZH.md)、[实施状态](docs/IMPLEMENTATION_STATUS_2026_10_21_ZH.md) 和 [A0 复现证据](docs/A0_BASELINE_2026_10_21_ZH.md)。
 
 ## 📖 使用文档
 
@@ -32,10 +40,10 @@
 - **设备与账户**：独立设备授权/撤销、access/refresh 轮换、审计。
 - **服务器配置**：可切换自部署服务器，外网强制 HTTPS。
 - **现有额度功能**：手工登记、在线额度看板、提醒规则、通知、历史记录。
-- **客户端**：Web/PWA、Electron Windows/macOS/Linux 与 Flutter Android/iOS；统一 v1.1.4，签名与安装说明见 [客户端文档](docs/CLIENT_PACKAGES_ZH.md)。
+- **客户端**：Web/PWA、Electron Windows/macOS/Linux 与 Flutter Android/iOS；Windows/Android v1.1.7，其他平台保留 v1.1.4，签名与安装说明见 [客户端文档](docs/CLIENT_PACKAGES_ZH.md)。
 - **部署**：Windows/Linux 服务端单二进制（已内嵌 Web），PostgreSQL；可选 Docker + Caddy。
 
-M0 增量事件流同步的是便笺；Codex 自动采集作为后续增量，使用独立快照接口。其他 Provider 自动采集、额度领域离线事件同步、手机后台通知及多人协作仍属后续阶段。
+M0 增量事件流同步的是便笺；Codex 自动采集作为后续增量，使用独立快照接口。其他 Provider 自动采集、额度领域离线事件同步与多人协作仍属后续阶段；Android 已支持系统周期后台检查，实时推送尚未接入。
 
 ## 在这台电脑启动
 

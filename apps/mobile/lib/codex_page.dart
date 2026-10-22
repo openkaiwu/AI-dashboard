@@ -6,6 +6,7 @@ import 'store.dart';
 import 'theme.dart';
 import 'reminder_policy.dart';
 import 'consumption_panel.dart';
+import 'background_settings.dart';
 
 const Map<String, String> planLabel = {
   'plus': 'Plus',
@@ -38,6 +39,7 @@ class _CodexPageState extends State<CodexPage>
   late TabController tabs;
   String selectedDevice = '';
   String reminderFilter = 'pending';
+  bool radarRecent = true;
   bool alertBusy = false;
   double reservePercent = 10;
 
@@ -79,7 +81,9 @@ class _CodexPageState extends State<CodexPage>
       if (mounted) {
         setState(() {
           overview = data;
-          error = null;
+          error = data['_offline'] == true
+              ? '离线显示本机保存的记录；重新同步后更新。'
+              : data['_cache_error'] as String?;
           if (selectedDevice.isEmpty &&
               (data['devices'] as List?)?.isNotEmpty == true) {
             selectedDevice = data['devices'][0]['id'] as String;
@@ -476,7 +480,35 @@ class _CodexPageState extends State<CodexPage>
   Widget radarTab(Json? d, Json? overview) {
     final metrics = visibleMetrics(d);
     final news = (d?['snapshot']?['news'] ?? overview?['news']) as Json?;
-    final items = (news?['items'] as List?)?.cast<Json>() ?? [];
+    final seen = <String>{};
+    final items = ((news?['items'] as List?)?.cast<Json>() ?? []).where((item) {
+      final url = item['url']?.toString() ?? '';
+      final published =
+          DateTime.tryParse(item['published_at']?.toString() ?? '');
+      return RegExp(r'^https://x\.com/thsottiaux/status/[0-9]+$')
+              .hasMatch(url) &&
+          seen.add(url) &&
+          published != null &&
+          (!radarRecent || DateTime.now().difference(published).inHours <= 72);
+    }).toList()
+      ..sort((a, b) =>
+          (b['published_at'] as String).compareTo(a['published_at'] as String));
+    final observed =
+        DateTime.tryParse(d?['snapshot']?['observed_at']?.toString() ?? '');
+    final collecting = observed != null &&
+        DateTime.now().difference(observed).inMinutes < 3 &&
+        d?['snapshot']?['status'] == 'ok';
+    String countdown(num reset) {
+      final minutes = DateTime.fromMillisecondsSinceEpoch(reset.toInt() * 1000)
+          .difference(DateTime.now())
+          .inMinutes;
+      return minutes <= 0
+          ? '已到计划时间，等待新样本确认'
+          : minutes < 60
+              ? '$minutes 分钟后'
+              : '${minutes ~/ 60} 小时 ${minutes % 60} 分钟后';
+    }
+
     final checkedAt = DateTime.tryParse(news?['checked_at']?.toString() ?? '');
     final expired = checkedAt == null ||
         DateTime.now().difference(checkedAt).inMinutes >= 45;
@@ -490,12 +522,17 @@ class _CodexPageState extends State<CodexPage>
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       Text('重置雷达', style: Theme.of(context).textTheme.titleMedium),
       const Text('账户重置以本机采集到的窗口为准；外部消息仅供参考。'),
+      ListTile(
+          leading: Icon(collecting ? Icons.sensors : Icons.sensors_off),
+          title: Text(collecting ? '采集正常' : '采集停更 / 待确认'),
+          subtitle:
+              Text(observed == null ? '尚无采集样本' : '最近样本：${observed.toLocal()}')),
       for (final m in metrics.where((m) => m['resets_at'] != null))
         ListTile(
             title: Text(
                 '${m['bucket']} · ${(m['duration_minutes'] as num) / 60} 小时'),
             subtitle: Text(
-                '重置于 ${DateTime.fromMillisecondsSinceEpoch((m['resets_at'] as num).toInt() * 1000).toLocal()}')),
+                '${countdown(m['resets_at'] as num)}\n重置于 ${DateTime.fromMillisecondsSinceEpoch((m['resets_at'] as num).toInt() * 1000).toLocal()}')),
       if (metrics.every((m) => m['resets_at'] == null))
         const Text('暂无可核实的重置时间。'),
       const SizedBox(height: 16),
@@ -506,6 +543,13 @@ class _CodexPageState extends State<CodexPage>
                   ? HubTheme.warn
                   : HubTheme.accent)),
       Text(news == null ? '等待电脑同步检查结果' : '上次尝试 ${when(news['checked_at'])}'),
+      if (news?['last_success_at'] != null)
+        Text('最近成功 ${when(news!['last_success_at'])}'),
+      if (news?['status'] == 'unavailable') const Text('本次检查失败，保留历史已核实消息。'),
+      FilterChip(
+          label: const Text('仅最近 72 小时'),
+          selected: radarRecent,
+          onSelected: (v) => setState(() => radarRecent = v)),
       for (final item in items)
         Card(
             child: Padding(
@@ -559,7 +603,7 @@ class _CodexPageState extends State<CodexPage>
         for (final entry in [
           ['pending', '待处理'],
           ['read', '已读'],
-          ['snoozed', '稍后提醒'],
+          ['snoozed', '已暂缓'],
           ['dismissed', '已忽略'],
         ])
           FilterChip(
@@ -599,11 +643,6 @@ class _CodexPageState extends State<CodexPage>
                             ? null
                             : () => alertAction(a['id'], 'read'),
                         child: const Text('已读')),
-                    OutlinedButton(
-                        onPressed: alertBusy
-                            ? null
-                            : () => alertAction(a['id'], 'snooze'),
-                        child: const Text('1 小时后提醒')),
                     TextButton(
                         onPressed: alertBusy
                             ? null
@@ -634,6 +673,7 @@ class _CodexPageState extends State<CodexPage>
     final plan = overview?['plan'] as Json?;
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       Text('按你的习惯提醒', style: Theme.of(context).textTheme.titleMedium),
+      BackgroundSettings(api: widget.api),
       DropdownButtonFormField<String>(
         initialValue: plan?['plan_type'] as String? ?? 'unknown',
         decoration: const InputDecoration(labelText: 'Codex 套餐（手动设置）'),
@@ -656,7 +696,7 @@ class _CodexPageState extends State<CodexPage>
       ),
       const SizedBox(height: 8),
       const Text(
-          '规则和处理状态跨端保存。额度风险与卡片到期可弹出；多用建议和外部消息仅在页面显示。已读后本次事件不再提醒。后台通知依赖应用仍在运行。'),
+          '规则和处理状态跨端保存。额度风险与卡片到期可弹出；多用建议和外部消息仅在页面显示。已读后本次事件不再提醒。Android 可开启系统后台任务；送达受通知权限和省电策略影响。'),
       const SizedBox(height: 16),
       if (prefs != null)
         SwitchListTile(

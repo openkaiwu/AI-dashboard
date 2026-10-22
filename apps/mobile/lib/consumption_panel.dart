@@ -4,6 +4,21 @@ import 'api.dart';
 import 'store.dart' show Json;
 import 'theme.dart';
 
+String consumptionFreshness(Json data) {
+  final observed = DateTime.tryParse(data['data_as_of'] as String? ?? '');
+  final time = observed == null ? '采集时间未知' : '数据截至 ${observed.toLocal()}';
+  const sources = {
+    'server_rollup': '服务器采样',
+    'local_backup': '本机备份聚合',
+    'merged': '服务器与本机备份合并',
+    'none': '暂无采集来源'
+  };
+  final source = sources[data['source']];
+  final stale =
+      data['stale_reason'] == 'stale_source' ? ' · 数据已滞后，请检查采集或同步状态' : '';
+  return '$time${source == null ? '' : ' · 来源：$source'}$stale';
+}
+
 class ConsumptionPoint {
   final String label;
   final double? value;
@@ -146,12 +161,12 @@ class _ConsumptionPanelState extends State<ConsumptionPanel> {
         }
         if (!mounted || requestGeneration != generation) return;
         setState(() {
-          data[key] = {
-            ...result,
-            'generated_at':
-                result['generated_at'] ?? DateTime.now().toIso8601String()
-          };
-          errors.remove(key);
+          data[key] = result;
+          if (result['_offline'] == true) {
+            errors.add(key);
+          } else {
+            errors.remove(key);
+          }
           pending.remove(key);
         });
       } catch (_) {
@@ -472,11 +487,11 @@ class _ConsumptionPanelState extends State<ConsumptionPanel> {
                                   style: TextStyle(
                                       fontSize: 11, color: HubTheme.muted))),
                       ],
-                      if (data[selectedKey]?['generated_at'] != null)
+                      if (data[selectedKey] != null)
                         Padding(
                             padding: const EdgeInsets.only(top: 15),
                             child: Text(
-                                '${errors.contains(selectedKey) ? '刷新失败，保留上次数据' : '数据更新于'} · ${stamp(data[selectedKey]!['generated_at'] as String)}',
+                                '${errors.contains(selectedKey) ? '刷新失败，保留上次数据 · ' : ''}${consumptionFreshness(data[selectedKey]!)}',
                                 style: const TextStyle(
                                     fontSize: 10, color: HubTheme.muted))),
                     ]))),

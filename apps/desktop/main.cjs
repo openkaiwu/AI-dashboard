@@ -8,7 +8,7 @@ if(typeof process!=='undefined'&&process.env.AIHUB_PREVIEW_USER_DATA){
  fs.mkdirSync(previewDir,{recursive:true});
  app.setPath('userData',previewDir);
 }
-let win,tray,quitting=false,alertOpen=false;
+let win,tray,quitting=false;
 function uiOrigin(){return runtime.getUiOrigin();}
 function allowOrigin(url){try{return new URL(url).origin===uiOrigin();}catch{return false;}}
 if(!app.requestSingleInstanceLock())app.quit();
@@ -46,14 +46,14 @@ else {
    if(e.sender!==win.webContents||e.senderFrame!==win.webContents.mainFrame||!allowOrigin(e.senderFrame.url))throw Error('Unauthorized sender');
    return showAlert(value);
   });
+  for(const [channel,handler] of Object.entries({'local-data-request':runtime.localRequest,'local-data-status':runtime.localStatus,'local-data-sync':runtime.syncLocalData})){
+   ipcMain.handle(channel,(e,...args)=>{
+    if(e.sender!==win.webContents||e.senderFrame!==win.webContents.mainFrame||!allowOrigin(e.senderFrame.url)||typeof args[0]!=='string'||args[0].length>128)throw Error('Unauthorized sender');
+    return handler(...args);
+   });
+  }
   async function showAlert(value){
-   if(alertOpen||!value||typeof value.title!=='string'||typeof value.body!=='string'||value.title.length>200||value.body.length>3000)return 'retry';
-   alertOpen=true;win.show();win.restore();win.focus();win.flashFrame(true);
-   const isCodex=value.provider==='Codex';
-   try{const result=await dialog.showMessageBox(win,{type:'warning',title:'AI Hub · 重要提醒',message:value.title,detail:value.body+'\n\n同一事件只自动提醒一次；1 小时后重新检查；忽略持续到本次事件失效。处理状态同步到其他设备。',buttons:['已读','1 小时后提醒','忽略本次',...(isCodex?['打开 Codex 手动停止']:[])],defaultId:0,cancelId:0,noLink:true});
-    if(isCodex&&result.response===3){await shell.openExternal('codex://');return 'read';}
-    return ['read','snooze','dismiss'][result.response]||'read';
-   }finally{win.flashFrame(false);alertOpen=false;}
+   return 'silent'; // Quota reminders are delivered by the primary phone.
   }
   ipcMain.handle('open-codex',async e=>{if(e.sender!==win.webContents||e.senderFrame!==win.webContents.mainFrame||!allowOrigin(e.senderFrame.url))throw Error('Unauthorized sender');await shell.openExternal('codex://');});
   ipcMain.on('session-get',(e,id)=>{if(e.sender!==win.webContents||e.senderFrame!==win.webContents.mainFrame||!allowOrigin(e.senderFrame.url)||typeof id!=='string'||id.length>128)return;e.returnValue=runtime.readDesktopSession(id);});

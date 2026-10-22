@@ -2,6 +2,8 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'store.dart';
 import 'sync_engine.dart';
+import 'local_cache.dart';
+import 'background_sync.dart';
 
 String validateServer(String input) {
   final u = Uri.parse(input.trim());
@@ -58,6 +60,52 @@ class HubApi implements Transport {
 
   @override
   Future<Json> call(String method, String path, [Json? body]) async {
+    final cacheable = method == 'GET' &&
+        (path.startsWith('/api/v1/codex/overview') ||
+            path.startsWith('/api/v1/codex/consumption') ||
+            path == '/api/v1/local-data');
+    final key = '$base|${session?['user']?['id']}|$path';
+    try {
+      final value = await _callNetwork(method, path, body);
+      if (cacheable && session?['user']?['id'] != null) {
+        try {
+          await LocalCache.save(key, value);
+        } catch (_) {
+          value['_cache_error'] = '手机本地保存失败，请检查可用空间；当前仍显示最新服务器数据。';
+        }
+      }
+      return value;
+    } catch (e) {
+      if (cacheable &&
+          session != null &&
+          session?['blocked'] != true &&
+          !(e is ApiFailure && (e.status == 401 || e.status == 403))) {
+        final value = await LocalCache.read(key);
+        Json? background;
+        if (path.startsWith('/api/v1/codex/overview')) {
+          background = await BackgroundSync.cached(this, 'overview');
+        }
+        if (path.startsWith('/api/v1/codex/consumption')) {
+          final params = Uri.parse(path).queryParameters;
+          final saved = await BackgroundSync.cached(this, 'local-data');
+          background = saved?['consumption']
+              ?['${params['window']}:${params['granularity']}'] as Json?;
+        }
+        final candidates = [
+          if (value != null) value,
+          if (background != null) background
+        ];
+        candidates.sort((a, b) => (b['generated_at']?.toString() ?? '')
+            .compareTo(a['generated_at']?.toString() ?? ''));
+        if (candidates.isNotEmpty) {
+          return {...candidates.first, '_offline': true};
+        }
+      }
+      rethrow;
+    }
+  }
+
+  Future<Json> _callNetwork(String method, String path, [Json? body]) async {
     if (session?['blocked'] == true) {
       throw ApiFailure(401, 'session_revoked', '请重新登录；本地修改仍保留');
     }
@@ -92,11 +140,13 @@ class HubApi implements Transport {
   Future<void> signIn(
       String email, String password, String name, String installationId,
       {String kind = 'mobile'}) async {
-    final result = await raw(
-        'POST',
-        '/api/v1/auth/login',
-        {'email': email, 'password': password, 'device_name': name,
-         'device_kind': kind, 'installation_id': installationId});
+    final result = await raw('POST', '/api/v1/auth/login', {
+      'email': email,
+      'password': password,
+      'device_name': name,
+      'device_kind': kind,
+      'installation_id': installationId
+    });
     await persist(result);
     session = result;
   }
@@ -105,8 +155,11 @@ class HubApi implements Transport {
   /// administrator approves it, so no session is created here.
   Future<void> register(
       String inviteCode, String email, String password, String note) async {
-    await raw('POST', '/api/v1/auth/register',
-        {'invite_code': inviteCode, 'email': email, 'password': password,
-         'note': note});
+    await raw('POST', '/api/v1/auth/register', {
+      'invite_code': inviteCode,
+      'email': email,
+      'password': password,
+      'note': note
+    });
   }
 }

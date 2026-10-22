@@ -4,6 +4,7 @@ import {Account,api} from "../api";
 import Dashboard,{fmtTime,sourceLabel} from "./Dashboard";
 import Inbox from "./Inbox";
 import Rules from "./Rules";
+import LocalDataSettings from '../LocalDataSettings';
 
 const tabs=[['overview','额度总览'],['plan','使用计划'],['reminders','提醒中心'],['news','重置雷达'],['settings','提醒设置']];
 export default function CursorOverview(){
@@ -17,5 +18,6 @@ export default function CursorOverview(){
  {tab==='reminders'&&<Inbox/>}
  {tab==='news'&&<section className="panel"><h2>重置雷达</h2><p>仅显示 Cursor 实际返回的重置和到期时间。</p>{accounts.flatMap(a=>a.buckets.filter(b=>b.reset_at||b.expires_at).map(b=><article className="news-item" key={b.id}><h3>{a.display_name} · {b.scope_key}</h3><p>重置：{fmtTime(b.reset_at)} · 到期：{fmtTime(b.expires_at)}</p><p className="muted compact">最近采集：{fmtTime(b.observed_at)} · {sourceLabel(b.source_type)}</p></article>))}{accounts.every(a=>a.buckets.every(b=>!b.reset_at&&!b.expires_at))&&<p>暂无可核实的重置时间。</p>}</section>}
  {tab==='settings'&&<Rules/>}
+ {(tab==='overview'||tab==='settings')&&<LocalDataSettings/>}
  </section>;
 }

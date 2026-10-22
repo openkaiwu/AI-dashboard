@@ -100,17 +100,21 @@ func (s *Service) Delivery(w http.ResponseWriter, r *http.Request) {
 	}
 	var oldToken, lease sql.NullTime
 	var delivered sql.NullTime
-	err = tx.QueryRowContext(r.Context(), `SELECT token,lease_until,delivered_at FROM codex_alert_deliveries WHERE user_id=$1 AND alert_id=$2`, who.UserID, id).Scan(&oldToken, &lease, &delivered)
+	err = tx.QueryRowContext(r.Context(), `SELECT token,lease_until,delivered_at FROM codex_alert_deliveries WHERE user_id=$1 AND alert_id=$2 AND device_id=$3`, who.UserID, id, who.DeviceID).Scan(&oldToken, &lease, &delivered)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		fail()
 		return
 	}
 	if oldToken.Valid && oldToken.Time.Equal(q.Token) && (delivered.Valid || (lease.Valid && lease.Time.After(now))) {
+		if delivered.Valid {
+			decline("delivered")
+			return
+		}
 		decline("reserved")
 		return
 	}
 	var previousPriority int
-	err = tx.QueryRowContext(r.Context(), `SELECT priority FROM codex_alert_deliveries WHERE user_id=$1 AND COALESCE(delivered_at,claimed_at)>$2 AND (delivered_at IS NOT NULL OR lease_until>$3) ORDER BY COALESCE(delivered_at,claimed_at) DESC LIMIT 1`, who.UserID, now.Add(-10*time.Minute), now).Scan(&previousPriority)
+	err = tx.QueryRowContext(r.Context(), `SELECT priority FROM codex_alert_deliveries WHERE user_id=$1 AND COALESCE(delivered_at,claimed_at)>$2 AND (delivered_at IS NOT NULL OR lease_until>$3) AND device_id=$4 ORDER BY COALESCE(delivered_at,claimed_at) DESC LIMIT 1`, who.UserID, now.Add(-10*time.Minute), now, who.DeviceID).Scan(&previousPriority)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		fail()
 		return
@@ -120,7 +124,7 @@ func (s *Service) Delivery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	claim := httpx.NewID("delivery")
-	_, err = tx.ExecContext(r.Context(), `INSERT INTO codex_alert_deliveries(user_id,alert_id,token,claim_id,device_id,priority,claimed_at,lease_until) VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(user_id,alert_id) DO UPDATE SET token=excluded.token,claim_id=excluded.claim_id,device_id=excluded.device_id,priority=excluded.priority,claimed_at=excluded.claimed_at,lease_until=excluded.lease_until,delivered_at=NULL`, who.UserID, id, q.Token, claim, who.DeviceID, advice.Priority, now, now.Add(2*time.Minute))
+	_, err = tx.ExecContext(r.Context(), `INSERT INTO codex_alert_deliveries(user_id,alert_id,token,claim_id,device_id,priority,claimed_at,lease_until) VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(user_id,alert_id,device_id) DO UPDATE SET token=excluded.token,claim_id=excluded.claim_id,priority=excluded.priority,claimed_at=excluded.claimed_at,lease_until=excluded.lease_until,delivered_at=NULL`, who.UserID, id, q.Token, claim, who.DeviceID, advice.Priority, now, now.Add(2*time.Minute))
 	if err != nil {
 		fail()
 		return

@@ -143,6 +143,9 @@ func (s *Service) Upload(w http.ResponseWriter, r *http.Request) {
 		s.promoteGlobalNews(r.Context(), bridgeOwner, q.News)
 	}
 	if applied {
+		if _, err := s.Evaluate(r.Context(), bridgeOwner, time.Now()); err != nil {
+			slog.Warn("reminder evaluation deferred", "error", err)
+		}
 		s.rollupUsage(r.Context(), bridgeID, len(old) > 0, &previous, &q)
 	}
 	httpx.WriteJSON(w, 200, map[string]bool{"ok": true, "applied": applied})
@@ -232,23 +235,34 @@ func (s *Service) promoteGlobalNews(ctx context.Context, ownerID string, news *c
 // upsertGlobalNews stores the news only when its check is at least as recent
 // as the stored one; reports whether the global row changed.
 func (s *Service) upsertGlobalNews(ctx context.Context, ownerID string, news *codex.News) (bool, error) {
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
+	if _, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(7711501)`); err != nil {
+		return false, err
+	}
 	var current []byte
-	if e := s.DB.QueryRowContext(ctx, `SELECT payload FROM global_codex_news WHERE id=1`).Scan(&current); e == nil {
+	var previous *codex.News
+	if e := tx.QueryRowContext(ctx, `SELECT payload FROM global_codex_news WHERE id=1`).Scan(&current); e == nil {
 		var existing codex.News
 		if json.Unmarshal(current, &existing) == nil && news.CheckedAt.Before(existing.CheckedAt) {
 			return false, nil
 		}
+		previous = &existing
 	} else if !errors.Is(e, sql.ErrNoRows) {
 		return false, e
 	}
-	payload, e := json.Marshal(news)
+	merged := codex.MergeNews(*news, previous)
+	payload, e := json.Marshal(merged)
 	if e != nil {
 		return false, e
 	}
-	if _, e = s.DB.ExecContext(ctx, `INSERT INTO global_codex_news(id,payload,source_user_id,refreshed_at) VALUES(1,$1,$2,now()) ON CONFLICT (id) DO UPDATE SET payload=excluded.payload,source_user_id=excluded.source_user_id,refreshed_at=now()`, payload, ownerID); e != nil {
+	if _, e = tx.ExecContext(ctx, `INSERT INTO global_codex_news(id,payload,source_user_id,refreshed_at) VALUES(1,$1,$2,now()) ON CONFLICT (id) DO UPDATE SET payload=excluded.payload,source_user_id=excluded.source_user_id,refreshed_at=now()`, payload, ownerID); e != nil {
 		return false, e
 	}
-	return true, nil
+	return true, tx.Commit()
 }
 
 // RadarTokenCreate rotates the long-lived token that the reset-radar

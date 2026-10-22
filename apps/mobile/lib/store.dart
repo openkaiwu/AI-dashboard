@@ -118,9 +118,15 @@ class HubStore extends GeneratedDatabase {
       });
 
   Future<void> clearScope(String scope) => transaction(() async {
-        for (final table in ['sync_state', 'notes', 'pending_ops', 'conflicts']) {
+        for (final table in [
+          'sync_state',
+          'notes',
+          'pending_ops',
+          'conflicts'
+        ]) {
           await customStatement('DELETE FROM $table WHERE scope=?', [scope]);
         }
-        await customStatement('DELETE FROM settings WHERE key=?', ['codex:$scope']);
+        await customStatement(
+            'DELETE FROM settings WHERE key=?', ['codex:$scope']);
       });
 }

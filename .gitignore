@@ -1,4 +1,5 @@
 upstream/
+.workbuddy/
 .tools/
 .runtime/
 data/

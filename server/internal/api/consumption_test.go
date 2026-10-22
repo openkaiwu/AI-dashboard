@@ -256,9 +256,7 @@ func TestConsumptionPlanVisibility(t *testing.T) {
 			t.Fatalf("plan %d %v", code, out)
 		}
 		want := 8.0
-		if plan == "plus" {
-			want = 38
-		}
+		// An omitted window always means weekly; Plus must not sum windows.
 		for _, granularity := range []string{"daily", "weekly", "monthly"} {
 			if got := sumConsumed(t, ts, token, granularity); got != want {
 				t.Fatalf("%s %s total %v want %v", plan, granularity, got, want)

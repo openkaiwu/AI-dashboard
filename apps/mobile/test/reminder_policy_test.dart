@@ -70,14 +70,14 @@ void main() {
         }, [], now),
         isEmpty);
   });
-  test('popup cadence allows escalation and preserves small remaining values',
+  test('hard 30 minute cadence cannot be bypassed by priority',
       () {
     final last = {'at': now.millisecondsSinceEpoch, 'priority': 3};
     expect(ReminderPolicy.canInterrupt(last, 3, now), isFalse);
-    expect(ReminderPolicy.canInterrupt(last, 4, now), isTrue);
+    expect(ReminderPolicy.canInterrupt(last, 4, now), isFalse);
     expect(
         ReminderPolicy.canInterrupt(
-            last, 2, now.add(const Duration(minutes: 10))),
+            last, 2, now.add(const Duration(minutes: 30))),
         isTrue);
     expect(ReminderPolicy.remainingLabel(0.04), '<0.1');
     expect(ReminderPolicy.remainingLabel(0.3), '0.3');

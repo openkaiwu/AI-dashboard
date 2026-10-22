@@ -20,6 +20,7 @@ import 'workspace_chrome.dart';
 import 'manual_account.dart';
 import 'strong_reminder_ui.dart';
 import 'reminder_policy.dart';
+import 'background_sync.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -101,6 +102,11 @@ class _HubHomeState extends State<HubHome> with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState value) {
     if (value == AppLifecycleState.resumed && engine != null && !busy) {
+      if (api != null) {
+        unawaited(BackgroundSync.renew(api!).catchError((Object e) {
+          if (mounted) setState(() => error = '后台授权需检查：$e');
+        }));
+      }
       unawaited(sync());
       unawaited(pollStrongNotifications());
     }
@@ -162,9 +168,14 @@ class _HubHomeState extends State<HubHome> with WidgetsBindingObserver {
         savedMode == 'cursor' || savedMode == 'codex' ? savedMode! : 'choose';
     if (mounted) setState(() => error = null);
     if (engine != null) {
+      unawaited(BackgroundSync.renew(api!).catchError((Object e) {
+        if (mounted) setState(() => error = '后台授权检查失败，请在手机提醒设置重试：$e');
+      }));
       unawaited(sync());
       unawaited(pollStrongNotifications());
       unawaited(refreshModeStatus());
+    } else {
+      unawaited(BackgroundSync.disable());
     }
   }
 
@@ -265,6 +276,11 @@ class _HubHomeState extends State<HubHome> with WidgetsBindingObserver {
   }
 
   Future<void> pollStrongNotifications({String? requestedId}) async {
+    if (Platform.isAndroid) {
+      if (api != null) await BackgroundSync.check(api!);
+      return;
+    }
+
     final current = api;
     final scope = reminderScope(current);
     if (current == null || scope == null || !mounted || reminderPopupOpen) {
@@ -294,6 +310,11 @@ class _HubHomeState extends State<HubHome> with WidgetsBindingObserver {
         if (requestedId != null && candidate['id'] != requestedId) continue;
         final delivered =
             await vault.read(key: 'strong-seen:$scope:${candidate['id']}');
+        if (requestedId == null &&
+            await BackgroundSync.seen(current, candidate['id'] as String,
+                candidate['_token'] as String)) {
+          continue;
+        }
         if (requestedId != null || delivered != candidate['_token']) {
           next = candidate;
           break;
@@ -328,7 +349,12 @@ class _HubHomeState extends State<HubHome> with WidgetsBindingObserver {
       if (isCodex && requestedId == null) {
         final result = await current
             .call('POST', deliveryPath, {'action': 'claim', 'token': token});
-        if (result['claimed'] != true) return;
+        if (result['claimed'] != true) {
+          if (['delivered', 'changed', 'inactive'].contains(result['reason'])) {
+            await vault.write(key: seenKey, value: token);
+          }
+          return;
+        }
         claim = result['claim_id'] as String;
       }
       Future<void> receipt(String action) async {
@@ -369,6 +395,7 @@ class _HubHomeState extends State<HubHome> with WidgetsBindingObserver {
           await receipt('delivered');
           await recordCadence();
           await vault.write(key: seenKey, value: token);
+          await BackgroundSync.mark(current, id, token);
         } else {
           await receipt('release');
         }
@@ -381,6 +408,7 @@ class _HubHomeState extends State<HubHome> with WidgetsBindingObserver {
       await receipt('delivered');
       await recordCadence();
       await vault.write(key: seenKey, value: token);
+      await BackgroundSync.mark(current, id, token);
       final action = await showing;
       if (!mounted ||
           api != current ||
@@ -841,6 +869,7 @@ class _HubHomeState extends State<HubHome> with WidgetsBindingObserver {
                         final currentScope =
                             '${selected!['url']}|${current['user']['id']}|${current['device_id']}';
                         await api!.call('POST', '/api/v1/auth/logout');
+                        await BackgroundSync.disable();
                         await store!.clearScope(currentScope);
                         for (final key in (await vault.readAll()).keys) {
                           if (key.startsWith('strong-seen:$currentScope:')) {

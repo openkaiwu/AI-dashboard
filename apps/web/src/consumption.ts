@@ -2,6 +2,7 @@ export type UsageRow = {bucket_start:string;consumed_pp:number|null;coverage_hou
 export type HourRow = {hour:string;consumed_pp:number|null;samples:number;resets?:number};
 export type UsageData = {
   generated_at?:string; tz_offset_minutes?:number;
+  data_as_of?:string; source?:string; stale_reason?:string;
   series?:UsageRow[]; hourly?:HourRow[];
   generations?:{resets_at:number|null;points:{t:string;used:number}[]}[];
 };

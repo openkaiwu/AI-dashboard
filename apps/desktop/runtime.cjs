@@ -6,6 +6,7 @@ const https=require('node:https');
 const path=require('node:path');
 const platform=require('./platform.cjs');
 const credentialStore=require('./credentialStore.cjs');
+const localData=require('./localData.cjs');
 const secretCache=new Map();
 
 const LOCAL_ORIGIN='http://127.0.0.1:8080';
@@ -102,7 +103,7 @@ function httpsJson(method,urlStr,body,headers={}){
   const req=https.request({hostname:u.hostname,port:u.port||443,path:u.pathname+u.search,method,headers:{'Content-Type':'application/json',...headers,...(data?{'Content-Length':Buffer.byteLength(data)}:{})},timeout:15000,servername:u.hostname},res=>{
    let raw='';
    res.on('data',c=>{raw+=c;});
-   res.on('end',()=>{try{const parsed=JSON.parse(raw||'{}');if(res.statusCode>=300)reject(new Error(parsed.message||parsed.error||`HTTP ${res.statusCode}`));else resolve(parsed);}catch(e){reject(e);}});
+   res.on('end',()=>{try{const parsed=JSON.parse(raw||'{}');if(res.statusCode>=300){const err=new Error(parsed.message||parsed.error||`HTTP ${res.statusCode}`);err.status=res.statusCode;reject(err);}else resolve(parsed);}catch(e){reject(e);}});
   });
   req.on('error',reject);
   req.setTimeout(15000,()=>req.destroy(new Error('连接超时')));
@@ -177,7 +178,7 @@ async function apiJson(url,options={}){
  }
  const res=await fetch(url,{...options,headers:{'Content-Type':'application/json',...(options.headers||{})},signal:AbortSignal.timeout(20000)});
  const parsed=await res.json().catch(()=>({}));
- if(!res.ok)throw new Error(parsed.message||parsed.error||`请求失败 (${res.status})`);
+ if(!res.ok){const err=new Error(parsed.message||parsed.error||`请求失败 (${res.status})`);err.status=res.status;throw err;}
  return parsed;
 }
 async function createBridgeToken(server,accessToken,name){
@@ -248,18 +249,41 @@ function syncBridgeFromSession(webContents,config){
  bridgeSync=syncBridgeSession(webContents,config).finally(()=>{bridgeSync=null;});
  return bridgeSync;
 }
+// Share the renderer's refresh lock: refresh tokens are rotated and must never
+// be consumed concurrently by a background sync and a normal page request.
+async function refreshSessionForSync(webContents,profileId){
+ async function refreshInRenderer(id){
+  await navigator.locks.request('hub-refresh:'+id,async()=>{
+   const session=window.aihubDesktop.sessionGet(id);
+   if(!session?.token||session.blocked)throw Error('请重新登录以继续同步');
+   if(Date.parse(session.expires_at)>Date.now()+60000)return;
+   const response=await fetch('/api/v1/auth/refresh',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({refresh_token:session.refresh_token}),signal:AbortSignal.timeout(15000),redirect:'error'});
+   if(window.aihubDesktop.sessionGet(id)?.refresh_token!==session.refresh_token)throw Error('登录状态已改变');
+   if(!response.ok){if(response.status===401)window.aihubDesktop.sessionSet(id,{...session,blocked:true});throw Error('登录续期失败，本地数据已保留');}
+   if(!window.aihubDesktop.sessionSet(id,await response.json()))throw Error('无法安全保存续期凭据');
+  });
+ }
+ return webContents.executeJavaScript(`(${refreshInRenderer.toString()})(${JSON.stringify(profileId)})`,true);
+}
 async function syncBridgeSession(webContents,config){
  const dir=ensureDataDir();
  const picked=await webContents.executeJavaScript(`(()=>{try{const id=localStorage.getItem('hub_profile');const profiles=JSON.parse(localStorage.getItem('hub_profiles')||'[]');const profile=profiles.find(p=>p.id===id)||profiles[0]||{id:'default',url:location.origin};return {id:profile.id,server:profile.url};}catch{return null;}})()`,true);
  const session=picked?readDesktopSession(picked.id):null;
  if(process.env.AIHUB_STARTUP_DIAGNOSTICS==='1')console.error('startup_session',JSON.stringify({profile:picked?.id,hasSession:!!session,blocked:!!session?.blocked,electron:process.versions.electron}));
  if(!session?.token||session.blocked){stopBridge();return;}
+ const localDir=localDirectory(picked.id);
+ await seedLocalData(picked.id);
  const existing=readJson(path.join(dir,'bridge.json'));
- if(bridgeReady(existing)&&existing.server===picked.server&&existing.device_id===session.device_id){await ensureBridge(dir,config);return;}
+ if(bridgeReady(existing)&&existing.server===picked.server&&existing.device_id===session.device_id){
+  if(existing.local_store!==localDir){existing.local_store=localDir;fs.writeFileSync(path.join(dir,'bridge.json'),JSON.stringify(existing,null,2));}
+  await ensureBridge(dir,config);
+  if(localData.settings(localDir).auto_sync){try{await refreshSessionForSync(webContents,picked.id);await syncLocalData(picked.id);}catch(e){lastError=e.message;const file=path.join(localDir,'sync-status.json');localData.write(file,{...localData.read(file,{}),error:e.message});}}
+  return;
+ }
  stopBridge();
  try{
   const token=await createBridgeToken(picked.server,session.token,'我的电脑');
-  writeBridge(dir,{server:picked.server,device_id:session.device_id,codex_path:await platform.findCodex()||'',cursor_enabled:true,interval_seconds:config.bridgeIntervalSeconds||60},token);
+  writeBridge(dir,{server:picked.server,device_id:session.device_id,local_store:localDir,codex_path:await platform.findCodex()||'',cursor_enabled:true,interval_seconds:config.bridgeIntervalSeconds||60},token);
   await ensureBridge(dir,config);
  }catch(e){lastError=`采集器连接失败：${e.message}`;}
 }
@@ -280,4 +304,115 @@ function stopManaged(){
  }
 }
 function startupMessage(){return lastError||'';}
-module.exports={ensureReady,stopManaged,stopBridge,startupMessage,getUiOrigin,getActiveMode,setUserMode,setCloudServer,installationID,extensionPairCode,forceLocalMode,resetMode,clearModePreference,readModePreference,probeCloud,loadConfig,dataDir,readDesktopSession,writeDesktopSession,syncBridgeFromSession,LOCAL_ORIGIN,ORIGIN:LOCAL_ORIGIN,DEFAULT_CLOUD};
+function localDirectory(profileId){const session=readDesktopSession(profileId);if(!session?.user?.id||session.blocked)throw Error('请先登录');return localData.directory(app.getPath('userData'),getUiOrigin(),session.user.id);}
+async function localRequest(profileId,pathname,method,body){
+ if(typeof pathname!=='string'||pathname.length>1024||!['GET','POST','PATCH','PUT'].includes(method))throw Error('无效的本地请求');
+ const dir=localDirectory(profileId);
+ if(pathname==='/api/v1/notifications'&&method==='GET'){
+  const file=path.join(dir,'notification-rules.json');
+  if(!fs.existsSync(file)||Date.now()-fs.statSync(file).mtimeMs>60000){try{const session=readDesktopSession(profileId);localData.write(file,await apiJson(getUiOrigin()+'/api/v1/notification-rules',{headers:{Authorization:`Bearer ${session.token}`}}));}catch{/* Use the last saved rules while offline. */}}
+ }
+ const value=localData.request(dir,pathname,method,body);return {handled:value!==undefined&&value!==null,value};
+}
+function localStatus(profileId,patch){const dir=localDirectory(profileId);return {...localData.settings(dir,patch),...localData.read(path.join(dir,'sync-status.json'),{}),directory:dir,observed_at:localData.read(path.join(dir,'codex-latest.json'))?.observed_at,queue:localData.queueStatus(dir)};}
+async function seedLocalData(profileId){
+ const dir=localDirectory(profileId);if(fs.existsSync(path.join(dir,'baseline.json')))return;
+ const session=readDesktopSession(profileId),headers={Authorization:`Bearer ${session.token}`},server=getUiOrigin();
+ try {
+  const overview=await apiJson(server+'/api/v1/codex/overview',{headers});
+  localData.write(path.join(dir,'cloud-dashboard.json'),await apiJson(server+'/api/v1/dashboard',{headers}));
+  localData.write(path.join(dir,'cloud-notifications.json'),await apiJson(server+'/api/v1/notifications',{headers}));
+  localData.write(path.join(dir,'notification-rules.json'),await apiJson(server+'/api/v1/notification-rules',{headers}));
+  const data={};
+  for(const duration of [10080,300])for(const kind of ['daily','hourly',...(duration===300?['window']:[])])data[duration+':'+kind]=await apiJson(server+`/api/v1/codex/consumption?window=${duration}&granularity=${kind}&days=365&hours=24`,{headers});
+  localData.seed(dir,overview,data);
+ }catch{localData.seed(dir,null,null);}
+}
+const localSyncs=new Map();
+// Durable upload queue for local-data reception (plan 4.3): retries reuse the
+// same operation id, so a retry after a lost response replays as a duplicate
+// on the server instead of a second reception.
+const UPLOAD_BACKOFF_MS=[30000,60000,120000,240000,480000,900000];
+function uploadBackoffMs(attempts){const base=UPLOAD_BACKOFF_MS[Math.min(Math.max(attempts,0),UPLOAD_BACKOFF_MS.length-1)];return Math.round(base*(0.8+Math.random()*0.4));}
+const queueDrains=new Map();
+function scheduleQueueDrain(profileId,delayMs){
+ let dir;try{dir=localDirectory(profileId);}catch{return;}
+ if(queueDrains.has(dir))clearTimeout(queueDrains.get(dir));
+ const timer=setTimeout(()=>{queueDrains.delete(dir);void drainLocalQueue(profileId).catch(()=>{});},Math.max(delayMs,1000));
+ timer.unref();queueDrains.set(dir,timer);
+}
+async function drainLocalQueue(profileId){
+ const dir=localDirectory(profileId),status=localData.queueStatus(dir);
+ if(!status.pending||status.needs_auth)return;
+ if(status.next_attempt&&Date.parse(status.next_attempt)>Date.now()){scheduleQueueDrain(profileId,Date.parse(status.next_attempt)-Date.now());return;}
+ const session=readDesktopSession(profileId),server=getUiOrigin(),headers={Authorization:`Bearer ${session.token}`};
+ const cfg=readJson(path.join(dataDir(),'bridge.json'));
+ if(cfg?.local_store!==dir||cfg.server!==server)return; // bridge not ready yet; retried at the next sync
+ try{
+  await apiJson(server+'/api/v1/local-data',{method:'PUT',headers,body:JSON.stringify(localData.backup(dir,status.operation_id))});
+  localData.queueAccept(dir,status.operation_id);
+ }catch(e){
+  const needsAuth=e.status===401||e.status===403;
+  const backoff=needsAuth?0:uploadBackoffMs(status.attempts);
+  localData.queueFail(dir,status.operation_id,e.message,{backoff_ms:backoff,needs_auth:needsAuth});
+  if(!needsAuth&&localData.settings(dir).auto_sync)scheduleQueueDrain(profileId,backoff);
+ }
+}
+function syncLocalData(profileId){
+ const dir=localDirectory(profileId);if(localSyncs.has(dir))return localSyncs.get(dir);
+ const task=(async()=>{
+  const session=readDesktopSession(profileId),server=getUiOrigin(),headers={Authorization:`Bearer ${session.token}`};
+  const cfg=readJson(path.join(dataDir(),'bridge.json'));
+  if(cfg?.local_store!==dir||cfg.server!==server)throw Error('采集连接尚未就绪');
+  const statusFile=path.join(dir,'sync-status.json');
+  try {
+   localData.write(path.join(dir,'notification-rules.json'),await apiJson(server+'/api/v1/notification-rules',{headers}));
+   for(const slug of ['codex','cursor']){const snapshot=localData.read(path.join(dir,slug+'-latest.json'));if(snapshot)await apiJson(server+`/api/v1/${slug}/snapshot`,{method:'POST',headers:{Authorization:`Bearer ${readSecret('bridge-token')}`},body:JSON.stringify(snapshot)});}
+   const prefs=localData.preferences(dir),previous=localData.read(path.join(dir,'synced-preferences.json'));
+   const equal=(a,b)=>JSON.stringify(a)===JSON.stringify(b);
+   if(!previous||!equal(prefs.preferences,previous.preferences))await apiJson(server+'/api/v1/codex/preferences',{method:'PATCH',headers,body:JSON.stringify(prefs.preferences)});
+   if(!previous||prefs.plan!==previous.plan)await apiJson(server+'/api/v1/codex/plan',{method:'PUT',headers,body:JSON.stringify({plan_type:prefs.plan})});
+   const entry=localData.queueEnqueue(dir);
+   await apiJson(server+'/api/v1/local-data',{method:'PUT',headers,body:JSON.stringify(localData.backup(dir,entry.id))});
+   localData.queueAccept(dir,entry.id);
+   const remote=await apiJson(server+'/api/v1/codex/overview',{headers});
+   const synchronized={preferences:remote.preferences,plan:remote.plan?.plan_type||'unknown'};
+   if(equal(localData.preferences(dir),prefs))localData.write(path.join(dir,'preferences.json'),synchronized);
+   localData.write(path.join(dir,'synced-preferences.json'),synchronized);
+   localData.write(path.join(dir,'cloud-overview.json'),remote);
+   const file=path.join(dir,'reminders.json'),ledger=localData.read(file,{});
+   for(const alert of remote.alerts||[]) {
+    const local=ledger['local:'+alert.advice.key];if(!local)continue;
+    const before=JSON.stringify(local);
+    if(local.pending_action){await apiJson(server+'/api/v1/codex/alerts/'+encodeURIComponent(alert.id),{method:'POST',headers,body:JSON.stringify({action:local.pending_action})});delete local.pending_action;}
+    else {local.read_at=alert.read_at;local.dismissed=alert.dismissed;local.snoozed_until=alert.snoozed_until;}
+    const current=localData.read(file,{});if(JSON.stringify(current[local.id])===before){current[local.id]=local;localData.write(file,current);}
+   }
+   const generic=await apiJson(server+'/api/v1/notifications',{headers});
+   localData.write(path.join(dir,'cloud-notifications.json'),generic);
+   localData.write(path.join(dir,'cloud-dashboard.json'),await apiJson(server+'/api/v1/dashboard',{headers}));
+   for(const entry of Object.values(localData.read(file,{})).filter(a=>a.id.startsWith('local-cursor:'))){
+    const target=generic.notifications.find(n=>n.active&&n.dedupe_key===entry.dedupe_key);if(!target)continue;
+    const before=JSON.stringify(entry);
+    if(entry.pending_action){await apiJson(server+'/api/v1/notifications/'+encodeURIComponent(target.id)+'/action',{method:'POST',headers,body:JSON.stringify({action:entry.pending_action})});delete entry.pending_action;}
+    else if(target.status==='read')entry.read_at=new Date().toISOString();else if(target.status==='dismissed')entry.dismissed=true;
+    const current=localData.read(file,{});if(JSON.stringify(current[entry.id])===before){current[entry.id]=entry;localData.write(file,current);}
+   }
+   localData.write(statusFile,{last_sync:new Date().toISOString(),error:null});
+  }catch(e){
+   const pending=localData.queueStatus(dir);
+   if(pending.pending){
+    const needsAuth=e.status===401||e.status===403;
+    const backoff=needsAuth?0:uploadBackoffMs(pending.attempts);
+    localData.queueFail(dir,pending.operation_id,e.message,{backoff_ms:backoff,needs_auth:needsAuth});
+    if(!needsAuth&&localData.settings(dir).auto_sync)scheduleQueueDrain(profileId,backoff);
+   }
+   localData.write(statusFile,{...localData.read(statusFile,{}),error:e.message});throw e;
+  }
+  return localStatus(profileId);
+ })().finally(()=>localSyncs.delete(dir));localSyncs.set(dir,task);return task;
+}
+module.exports.localRequest=localRequest;
+module.exports.localStatus=localStatus;
+module.exports.syncLocalData=syncLocalData;
+module.exports={refreshSessionForSync,localRequest,localStatus,syncLocalData,ensureReady,stopManaged,stopBridge,startupMessage,getUiOrigin,getActiveMode,setUserMode,setCloudServer,installationID,extensionPairCode,forceLocalMode,resetMode,clearModePreference,readModePreference,probeCloud,loadConfig,dataDir,readDesktopSession,writeDesktopSession,syncBridgeFromSession,LOCAL_ORIGIN,ORIGIN:LOCAL_ORIGIN,DEFAULT_CLOUD};

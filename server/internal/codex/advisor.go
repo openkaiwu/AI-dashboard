@@ -115,6 +115,34 @@ func recentRate(s Snapshot, h []Snapshot, id string, slot int, w *Window) *float
 	return ptr((w.UsedPercent - old.UsedPercent) / s.ObservedAt.Sub(oldest.ObservedAt).Hours())
 }
 
+// RapidConsumption uses observed percentage points, never an extrapolated rate.
+func RapidConsumption(s Snapshot, history []Snapshot, id string, slot int, w *Window) (float64, time.Duration) {
+	last, used, count := s.ObservedAt, w.UsedPercent, 1
+	var first time.Time
+	for i := len(history) - 1; i >= 0; i-- {
+		v := history[i]
+		age := s.ObservedAt.Sub(v.ObservedAt)
+		if age <= 0 {
+			continue
+		}
+		if age > 15*time.Minute {
+			break
+		}
+		old := matching(v, id, slot)
+		if last.Sub(v.ObservedAt) > 3*time.Minute || v.Status != "ok" || old == nil || old.ResetsAt == nil || w.ResetsAt == nil || *old.ResetsAt != *w.ResetsAt || old.DurationMinutes != w.DurationMinutes || old.UsedPercent > used {
+			break
+		}
+		first = v.ObservedAt
+		last = v.ObservedAt
+		used = old.UsedPercent
+		count++
+	}
+	if count < 3 || first.IsZero() {
+		return 0, 0
+	}
+	return w.UsedPercent - used, s.ObservedAt.Sub(first)
+}
+
 // A forecast must also have been risky at a previous collection, rather than
 // turning a single burst or a resumed connection into an urgent message.
 func sustainedRisk(s Snapshot, history []Snapshot, id string, slot int, w *Window, p Preferences) bool {
@@ -182,6 +210,13 @@ func Analyze(s Snapshot, history []Snapshot, p Preferences, now time.Time) Analy
 			if m.Remaining <= p.LowPercent {
 				blocked = true
 			}
+			if w.ResetsAt == nil && m.Remaining <= p.LowPercent {
+				level, priority := "low", 3
+				if m.Remaining <= 0 {
+					level, priority = "exhausted", 4
+				}
+				slows = append(slows, Advice{Key: fmt.Sprintf("%s:%d:unknown:%s:slow", b.ID, slot, level), Kind: "slow", Title: "剩余额度偏低，重置时间未知", Body: fmt.Sprintf("%s 剩余 %s。尚未获得重置时间，请在 Codex 确认可用额度。", b.ID, remainingText(m.Remaining)), Priority: priority, Reason: "quota_" + level, Interrupt: true})
+			}
 			if w.ResetsAt != nil {
 				hours := time.Unix(*w.ResetsAt, 0).Sub(now).Hours()
 				m.Hours = ptr(hours)
@@ -193,6 +228,9 @@ func Analyze(s Snapshot, history []Snapshot, p Preferences, now time.Time) Analy
 					m.Rate = recentRate(s, history, b.ID, slot, w)
 					if m.Rate != nil && *m.Rate > 0 {
 						m.Runway = ptr(m.Remaining / *m.Rate)
+					}
+					if delta, span := RapidConsumption(s, history, b.ID, slot, w); delta > 5+1e-9 && now.Sub(s.ObservedAt) <= 3*time.Minute && m.Remaining > p.LowPercent {
+						slows = append(slows, Advice{Key: fmt.Sprintf("%s:%d:%d:rapid", b.ID, slot, *w.ResetsAt), Kind: "slow", Title: "短时间额度消耗超过 5 点", Body: fmt.Sprintf("最近 %.0f 分钟额度消耗 %.1f 个百分点，当前剩余 %.1f%%。", span.Minutes(), delta, m.Remaining), Priority: 2, Reason: "rapid_consumption", Interrupt: true})
 					}
 					near := math.Min(p.NearHours, float64(w.DurationMinutes)/60*0.2)
 					key := fmt.Sprintf("%s:%d:%d", b.ID, slot, *w.ResetsAt)
@@ -219,7 +257,7 @@ func Analyze(s Snapshot, history []Snapshot, p Preferences, now time.Time) Analy
 							code = "runway_short"
 						}
 						if code == "pace_ahead" || code == "runway_short" {
-							interrupt = m.Rate != nil && *m.Rate > 0 && sustainedRisk(s, history, b.ID, slot, w, p)
+							interrupt = false // Forecasts remain page-only; rapid use has a separate observed threshold.
 							if interrupt {
 								title = "持续消耗偏快，建议放慢"
 								key += ":sustained"
@@ -253,10 +291,10 @@ func Analyze(s Snapshot, history []Snapshot, p Preferences, now time.Time) Analy
 			if hours > 0 && hours <= p.CreditHours {
 				priority, key := 3, "credit:"+item.ID
 				if hours <= 1 {
-					priority, key = 4, key+":urgent"
+					priority = 4
 				}
 				if hours <= 1.0/6 {
-					priority, key = 5, "credit:"+item.ID+":last-chance"
+					priority = 5
 				}
 				out.Advice = append(out.Advice, Advice{Key: key, Kind: "credit", Title: "重置卡快到期了", Body: fmt.Sprintf("一张可用重置卡约 %s 后到期。请在 Codex 检查兑换条件，并在到期前按需手动使用。", resetText(hours)), Priority: priority, Reason: "credit_expiry", Interrupt: true})
 			}

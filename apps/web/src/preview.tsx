@@ -26,7 +26,8 @@ const overview = {
 };
 const session = {token:'local-preview-only',refresh_token:'local-preview-only',device_id:'preview-device',user:{id:'preview-user',email:'preview@example.com',role:'user'}};
 // The desktop session adapter keeps preview credentials in memory, out of real storage.
-window.aihubDesktop = {sessionGet:()=>session,sessionSet:()=>true,openCodex:async()=>{throw new Error('界面预览不会启动应用');}} as unknown as NonNullable<typeof window.aihubDesktop>;
+const previewStorage={auto_sync:false,directory:'C:\\Users\\Example\\AppData\\Roaming\\aihub-desktop\\local-data\\preview',observed_at:iso()};
+window.aihubDesktop = {sessionGet:()=>session,sessionSet:()=>true,localStatus:async(_id:string,patch?:{auto_sync:boolean})=>Object.assign(previewStorage,patch||{}),syncLocalData:async()=>({...previewStorage,last_sync:iso()}),openCodex:async()=>{throw new Error('界面预览不会启动应用');}} as unknown as NonNullable<typeof window.aihubDesktop>;
 class PreviewChannel extends EventTarget { close() {} }
 window.WebSocket = PreviewChannel as unknown as typeof WebSocket;
 window.EventSource = PreviewChannel as unknown as typeof EventSource;
@@ -39,6 +40,7 @@ window.fetch = async (input, init) => {
     overview.devices[0].snapshot.observed_at = overview.generated_at;
     data=overview;
   }
+  else if(path==='/api/v1/codex/radar') {data={news:overview.news};}
   else if(path==='/api/v1/codex/preferences') {Object.assign(prefs,JSON.parse(String(init?.body||'{}')));data=prefs;}
   else if(path==='/api/v1/codex/plan') {Object.assign(overview.plan,JSON.parse(String(init?.body||'{}')));data=overview.plan;}
   else if(path==='/api/v1/codex/consumption') {

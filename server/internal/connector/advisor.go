@@ -44,7 +44,7 @@ func (s *Service) AlertAction(w http.ResponseWriter, r *http.Request) {
 	}
 	result, e := s.DB.ExecContext(r.Context(), `UPDATE codex_alerts SET
 		read_at=CASE WHEN $3='read' THEN now() ELSE NULL END,
-		notified_at=CASE WHEN $3 IN ('snooze','restore') THEN NULL ELSE notified_at END,
+		notified_at=notified_at,
 		dismissed=($3='dismiss'),
 		snoozed_until=CASE WHEN $3='snooze' THEN now()+interval '1 hour' ELSE NULL END
 		WHERE user_id=$1 AND id=$2 AND active`, auth.Who(r).UserID, r.PathValue("id"), q.Action)
@@ -66,6 +66,24 @@ func (s *Service) Overview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.WriteJSON(w, 200, out)
+}
+
+func (s *Service) RadarStatus(w http.ResponseWriter, r *http.Request) {
+	var raw []byte
+	if e := s.DB.QueryRowContext(r.Context(), `SELECT payload FROM global_codex_news WHERE id=1`).Scan(&raw); e != nil {
+		if errors.Is(e, sql.ErrNoRows) {
+			httpx.WriteJSON(w, 200, map[string]any{"news": nil})
+			return
+		}
+		httpx.Error(w, 503, "unavailable", "雷达暂不可用")
+		return
+	}
+	var news codex.News
+	if json.Unmarshal(raw, &news) != nil {
+		httpx.Error(w, 503, "unavailable", "雷达暂不可用")
+		return
+	}
+	httpx.WriteJSON(w, 200, map[string]any{"news": news})
 }
 
 func (s *Service) Evaluate(ctx context.Context, uid string, now time.Time) (map[string]any, error) {
@@ -218,7 +236,7 @@ func (s *Service) Evaluate(ctx context.Context, uid string, now time.Time) (map[
 		return nil, e
 	}
 	// Bound inactive history while preserving active dismissal/snooze state.
-	if _, e = tx.ExecContext(ctx, `DELETE FROM codex_alerts WHERE user_id=$1 AND NOT active AND last_seen<$2`, uid, now.Add(-30*24*time.Hour)); e != nil {
+	if _, e = tx.ExecContext(ctx, `DELETE FROM codex_alerts WHERE user_id=$1 AND NOT active AND last_seen<$2 AND NOT EXISTS(SELECT 1 FROM mobile_reminder_receipts m WHERE m.user_id=codex_alerts.user_id AND m.event_id=codex_alerts.id)`, uid, now.Add(-30*24*time.Hour)); e != nil {
 		return nil, e
 	}
 	if e = tx.Commit(); e != nil {

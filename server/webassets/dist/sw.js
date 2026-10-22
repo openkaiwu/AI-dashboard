@@ -1,5 +1,5 @@
-const CACHE="aihub-shell-a6bb3577c566";
-const PRECACHE=["/","/manifest.webmanifest","/icon.svg","/assets/index-CpjBAsT9.css","/assets/index-DWHuss0o.js"];
+const CACHE="aihub-shell-73e5a9170899";
+const PRECACHE=["/","/manifest.webmanifest","/icon.svg","/assets/index-BX_6JlJ-.js","/assets/index-CpjBAsT9.css"];
 self.addEventListener("install",event=>{
  event.waitUntil(caches.open(CACHE).then(cache=>cache.addAll(PRECACHE)).then(()=>self.skipWaiting()));
 });

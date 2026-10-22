@@ -13,6 +13,10 @@ export class ApiError extends Error {
 
 export async function request<T>(path:string,init:RequestInit={},retried=false):Promise<T>{
  const p=profile();const session=getSession(p);
+ if(session&&!session.blocked&&typeof window!=='undefined'&&window.aihubDesktop?.localRequest&&(path.startsWith('/api/v1/codex/')||path==='/api/v1/dashboard'||path.startsWith('/api/v1/notifications'))){
+  const local=await window.aihubDesktop.localRequest(p.id,path,init.method||'GET',typeof init.body==='string'?JSON.parse(init.body):undefined);
+  if(local.handled)return local.value as T;
+ }
  if(session?.blocked&&!path.startsWith("/api/v1/auth/"))throw new ApiError(401,"session_revoked","请重新登录；本地修改仍保留");
  const headers=new Headers(init.headers);headers.set("Accept","application/json");
  if(init.body)headers.set("Content-Type","application/json");

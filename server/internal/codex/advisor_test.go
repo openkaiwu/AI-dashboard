@@ -135,7 +135,7 @@ func TestAdviceConfirmationAndShortReset(t *testing.T) {
 	h := []Snapshot{}
 	for i, used := range []float64{30, 40, 50, 60} {
 		v := sample(now, used, 120)
-		v.ObservedAt = now.Add(time.Duration(i-4) * 5 * time.Minute)
+		v.ObservedAt = now.Add(time.Duration(i-4) * 2 * time.Minute)
 		h = append(h, v)
 	}
 	if a := Analyze(s, h, p, now); !a.Advice[0].Interrupt {

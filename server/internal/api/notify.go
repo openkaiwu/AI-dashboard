@@ -273,7 +273,7 @@ func (s *Server) listNotifications(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.db.QueryContext(r.Context(), `SELECT n.id, n.rule_id, n.provider_account_id, n.quota_bucket_id, n.title, n.body, n.severity, n.dedupe_key,
 		CASE WHEN n.status='snoozed' AND n.snoozed_until<=now() THEN 'unread' ELSE n.status END, n.created_at,
 		COALESCE(p.slug, ''), COALESCE(p.display_name, ''),
-		(n.rule_id IS NULL OR EXISTS (SELECT 1 FROM alert_states st WHERE st.user_id=n.user_id AND st.notification_id=n.id))
+		(n.rule_id IS NULL OR EXISTS (SELECT 1 FROM alert_states st WHERE st.user_id=n.user_id AND st.notification_id=n.id)), COALESCE(n.snoozed_until::text,n.created_at)
 		FROM notifications n
 		LEFT JOIN provider_accounts a ON a.id = n.provider_account_id
 		LEFT JOIN providers p ON p.id = a.provider_id
@@ -288,7 +288,8 @@ func (s *Server) listNotifications(w http.ResponseWriter, r *http.Request) {
 		var id, title, body, sev, key, status, created, providerSlug, providerName string
 		var ruleID, acct, bucket sql.NullString
 		var active bool
-		if err := rows.Scan(&id, &ruleID, &acct, &bucket, &title, &body, &sev, &key, &status, &created, &providerSlug, &providerName, &active); err != nil {
+		var deliveryToken string
+		if err := rows.Scan(&id, &ruleID, &acct, &bucket, &title, &body, &sev, &key, &status, &created, &providerSlug, &providerName, &active, &deliveryToken); err != nil {
 			httpx.Error(w, http.StatusInternalServerError, "internal", "读取通知失败")
 			return
 		}
@@ -305,6 +306,7 @@ func (s *Server) listNotifications(w http.ResponseWriter, r *http.Request) {
 			"dedupe_key":          key,
 			"status":              status,
 			"active":              active,
+			"delivery_token":      deliveryToken,
 			"created_at":          created,
 		})
 	}
@@ -506,6 +508,23 @@ func (s *Server) evaluateUser(ctx context.Context, uid string) error {
 			wanted[res.DedupeKey] = struct{}{}
 			if _, ok := active[res.DedupeKey]; ok {
 				continue
+			}
+			// A transient recovery must not manufacture another event in the same
+			// quota/reset/expiry cycle. Keep the original read and snooze state.
+			if rule.Type != notification.TypeStale {
+				var previousID string
+				err = s.db.QueryRowContext(ctx, `SELECT id FROM notifications WHERE user_id=$1 AND dedupe_key=$2 ORDER BY created_at DESC LIMIT 1`, uid, res.DedupeKey).Scan(&previousID)
+				if err == nil {
+					_, err = s.db.ExecContext(ctx, `INSERT INTO alert_states(user_id,dedupe_key,notification_id,created_at) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING`, uid, res.DedupeKey, previousID, now.UTC().Format("2006-01-02T15:04:05Z07:00"))
+					if err != nil {
+						return err
+					}
+					active[res.DedupeKey] = struct{}{}
+					continue
+				}
+				if err != sql.ErrNoRows {
+					return err
+				}
 			}
 			nid := httpx.NewID("ntf")
 			ts := now.UTC().Format("2006-01-02T15:04:05Z07:00")

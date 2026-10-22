@@ -40,21 +40,21 @@ func ParseParams(raw string) (Params, error) {
 }
 
 type Subject struct {
-	AccountID      string
-	AccountName    string
-	ProviderName   string
-	BucketID       string
-	ScopeKey       string
-	EntitlementID  string
-	PlanName       string
-	LimitValue     *float64
-	RemainingValue *float64
-	RemainingRatio *float64
-	ResetAt        *time.Time
-	ExpiresAt      *time.Time
-	RenewsAt       *time.Time
-	ObservedAt        *time.Time
-	CollectionStatus  string
+	AccountID        string
+	AccountName      string
+	ProviderName     string
+	BucketID         string
+	ScopeKey         string
+	EntitlementID    string
+	PlanName         string
+	LimitValue       *float64
+	RemainingValue   *float64
+	RemainingRatio   *float64
+	ResetAt          *time.Time
+	ExpiresAt        *time.Time
+	RenewsAt         *time.Time
+	ObservedAt       *time.Time
+	CollectionStatus string
 }
 
 type Result struct {
@@ -84,6 +84,9 @@ func Evaluate(rule Rule, sub Subject, now time.Time) Result {
 			threshold = *rule.Params.Ratio
 		}
 		res.DedupeKey = fmt.Sprintf("%s:%s", TypeLowQuota, sub.BucketID)
+		if sub.ResetAt != nil {
+			res.DedupeKey += ":" + sub.ResetAt.UTC().Format(time.RFC3339)
+		}
 		res.Title = fmt.Sprintf("%s 额度偏低", sub.ProviderName)
 		res.Severity = "warning"
 		if ratio != nil && *ratio < threshold {

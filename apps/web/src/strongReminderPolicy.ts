@@ -20,6 +20,7 @@ export function eligibleStrong(a: Alert, now: number) {
 export type GenericReminder = {
   id: string; title: string; body: string; severity: string; status: string;
   created_at: string; active?: boolean; dedupe_key?: string; provider_name?: string; provider_slug?: string;
+  delivery_token?: string;
 };
 
 export function eligibleGeneric(n: GenericReminder) {
@@ -41,7 +42,7 @@ export function reminderCandidates(alerts: Alert[], notifications: GenericRemind
       ...a.advice, title: a.advice.source_name ? `${a.advice.source_name} · ${a.advice.title}` : a.advice.title, provider: 'Codex',
     })),
     ...notifications.filter(eligibleGeneric).map(n => ({
-      source: 'generic' as const, id: n.id, token: n.id,
+      source: 'generic' as const, id: n.id, token: n.delivery_token || n.id,
       priority: n.severity === 'critical' ? 4 : 2,
       title: n.provider_name ? `${n.provider_name} · ${n.title}` : n.title,
       body: n.body, provider: n.provider_name,

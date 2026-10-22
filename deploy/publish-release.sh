@@ -16,17 +16,29 @@ while read -r checksum name; do
 done < SHA256SUMS.txt
 [[ ${#files[@]} -gt 0 && -s downloads.html ]] || { echo 'Empty release'; exit 1; }
 sha256sum -c SHA256SUMS.txt
-python3 - "$version" <<'PY'
-import html.parser, pathlib, sys, urllib.parse
+python3 - "$version" "$destination" <<'PY'
+import hashlib, html.parser, pathlib, re, sys, urllib.parse
 version = sys.argv[1]
+destination = pathlib.Path(sys.argv[2])
 files = {line.split(None, 1)[1].strip() for line in pathlib.Path('SHA256SUMS.txt').read_text().splitlines()}
 aliases = {'SHA256SUMS-latest.txt', f'SHA256SUMS-v{version}.txt', 'desktop/AIHub-Setup.exe', f'desktop/AIHub-Setup-{version}.exe', 'aihub-mobile.apk'}
 class Links(html.parser.HTMLParser):
     def handle_starttag(self, tag, attrs):
         attrs = dict(attrs)
-        if tag != 'a' or 'data-download' not in attrs:
+        if tag != 'a' or not ('data-download' in attrs or 'data-archive' in attrs):
             return
         href = urllib.parse.unquote(attrs.get('href', ''))
+        if 'data-archive' in attrs:
+            archive = attrs['data-archive']
+            if not re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+', archive) or not href.startswith('/downloads/'):
+                raise SystemExit('Invalid archived download')
+            name = href[len('/downloads/'):]
+            if '/' in name or '..' in name:
+                raise SystemExit('Invalid archived path')
+            manifest = {line.split(None, 1)[1].strip(): line.split()[0] for line in (destination / f'SHA256SUMS-v{archive}.txt').read_text().splitlines()}
+            if name not in manifest or hashlib.file_digest((destination / name).open('rb'), 'sha256').hexdigest() != manifest[name]:
+                raise SystemExit('Archived package verification failed: ' + name)
+            return
         if not href.startswith('/downloads/') or href[len('/downloads/'):] not in files | aliases:
             raise SystemExit('Unverified download link: ' + href)
 Links().feed(pathlib.Path('downloads.html').read_text())

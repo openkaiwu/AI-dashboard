@@ -11,6 +11,20 @@ const empty:UsageResource={data:{series:[],hourly:[],generations:[]},loading:fal
 const failed:UsageResource={loading:false,error:true};
 const render=(resources:UsageResources,planType='pro')=>renderToStaticMarkup(createElement(MemoryRouter,null,createElement(ConsumptionView,{resources,planType,basis:'10080',onBasis:()=>{},range:'7d',onRange:()=>{},onRefresh:()=>{},now})));
 describe('consumption data integrity and states',()=>{
+  it('never presents response generation time as observation time',()=>{
+    const daily={...empty,data:{generated_at:'2099-12-31T12:00:00Z'}};
+    const html=render({daily,hourly:empty,five:empty});
+    expect(html).toContain('采集时间未知');
+    expect(html).not.toContain('2099');
+    expect(html).not.toContain('数据截至');
+  });
+  it('shows observation time and source without requiring generation time',()=>{
+    const daily={...empty,data:{data_as_of:'2026-10-11T03:00:00Z',source:'server_rollup',stale_reason:'stale_source'}};
+    const html=render({daily,hourly:empty,five:empty});
+    expect(html).toContain('数据截至');
+    expect(html).toContain('服务器采样');
+    expect(html).toContain('数据已滞后');
+  });
   it('does not convert missing samples into zero',()=>{
     expect(sampleTotal(dailyPoints(undefined,7,now))).toBeNull();
     const points=dailyPoints({series:[{bucket_start:'2026-10-11',consumed_pp:0,coverage_hours:1}]},7,now);

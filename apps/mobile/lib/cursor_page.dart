@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'api.dart';
 import 'store.dart';
 import 'theme.dart';
+import 'background_settings.dart';
 
 class CursorPage extends StatefulWidget {
   final HubApi api;
@@ -151,7 +152,6 @@ class _CursorPageState extends State<CursorPage> {
                     itemBuilder: (_) => [
                       if (n['status'] == 'unread') ...const [
                         PopupMenuItem(value: 'read', child: Text('已读')),
-                        PopupMenuItem(value: 'snooze', child: Text('1 小时后提醒')),
                         PopupMenuItem(value: 'dismiss', child: Text('忽略本次')),
                       ] else ...const [
                         PopupMenuItem(value: 'read', child: Text('已读')),
@@ -180,6 +180,7 @@ class _CursorPageState extends State<CursorPage> {
   }
 
   Widget settingsTab() => ListView(children: [
+        BackgroundSettings(api: widget.api),
         const Text('Cursor 提醒规则与当前账户同步。'),
         for (final rule in rules)
           Card(

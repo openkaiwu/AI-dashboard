@@ -22,6 +22,7 @@ import (
 )
 
 type config struct {
+	LocalStore      string   `json:"local_store,omitempty"`
 	Server          string   `json:"server"`
 	Token           string   `json:"token"`
 	CodexPath       string   `json:"codex_path"`
@@ -115,7 +116,9 @@ func run() error {
 	client := &http.Client{Timeout: 20 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
-	if !*once { startExtensionBridge(ctx,client,cfg) }
+	if !*once {
+		startExtensionBridge(ctx, client, cfg)
+	}
 	next := map[string]time.Time{}
 	failures := map[string]int{}
 	codexMisses := 0
@@ -181,6 +184,14 @@ func uploadCodex(ctx context.Context, client *http.Client, cfg config, configPat
 			payload, _ = json.Marshal(sample)
 		}
 	}
+	if cfg.LocalStore != "" {
+		if e := saveLocalSample(cfg.LocalStore, provider.SlugCodex, payload); e != nil {
+			fmt.Println("Local quota save failed; retrying without uploading")
+			return false
+		}
+		fmt.Printf("%s codex saved locally: status=%s\n", time.Now().UTC().Format(time.RFC3339), sample.Status)
+		return true
+	}
 	return postSnapshot(ctx, client, cfg, provider.SlugCodex, payload, once, func() string {
 		return fmt.Sprintf("codex synced: status=%s buckets=%d", sample.Status, len(sample.Buckets))
 	})
@@ -189,6 +200,12 @@ func uploadCodex(ctx context.Context, client *http.Client, cfg config, configPat
 func uploadCursor(ctx context.Context, client *http.Client, cfg config, configPath string, once bool) bool {
 	sample := collectCursor(configPath)
 	payload, _ := json.Marshal(sample)
+	if cfg.LocalStore != "" {
+		if e := saveLocalSample(cfg.LocalStore, provider.SlugCursor, payload); e != nil {
+			return false
+		}
+		return true
+	}
 	return postSnapshot(ctx, client, cfg, provider.SlugCursor, payload, once, func() string {
 		return fmt.Sprintf("cursor synced: status=%s", sample.Status)
 	})

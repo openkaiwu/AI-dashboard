@@ -10,7 +10,7 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 class LocalNotifications {
   static final _plugin = FlutterLocalNotificationsPlugin();
   static bool _ready = false;
-  static const channelId = 'aihub_popup_reminders';
+  static const channelId = 'aihub_popup_reminders_v2';
   static const categoryId = 'aihub_reminder';
 
   /// id is the server notification id. action is read, snooze, dismiss, or open.
@@ -28,8 +28,6 @@ class LocalNotifications {
             categoryId,
             actions: [
               DarwinNotificationAction.plain('read', '已读',
-                  options: {DarwinNotificationActionOption.foreground}),
-              DarwinNotificationAction.plain('snooze', '1 小时后提醒',
                   options: {DarwinNotificationActionOption.foreground}),
               DarwinNotificationAction.plain('dismiss', '忽略本次',
                   options: {DarwinNotificationActionOption.foreground}),
@@ -72,6 +70,22 @@ class LocalNotifications {
     }
   }
 
+  static Future<void> requestPermission() async {
+    await init();
+    await _plugin
+        .resolvePlatformSpecificImplementation<
+            AndroidFlutterLocalNotificationsPlugin>()
+        ?.requestNotificationsPermission();
+  }
+
+  static int stableId(String id) {
+    var hash = 0;
+    for (final unit in id.codeUnits) {
+      hash = (31 * hash + unit) & 0x7fffffff;
+    }
+    return hash;
+  }
+
   static Future<bool> showReminder({
     required String id,
     required String title,
@@ -110,8 +124,6 @@ class LocalNotifications {
           fullScreenIntent: false,
           actions: const [
             AndroidNotificationAction('read', '已读', showsUserInterface: true),
-            AndroidNotificationAction('snooze', '1 小时后提醒',
-                showsUserInterface: true),
             AndroidNotificationAction('dismiss', '忽略本次',
                 showsUserInterface: true),
           ],
@@ -125,7 +137,7 @@ class LocalNotifications {
           interruptionLevel: InterruptionLevel.timeSensitive,
         ),
       );
-      final code = id.hashCode & 0x7fffffff;
+      final code = stableId(id);
       await _plugin.show(
         id: code,
         title: title,
@@ -140,6 +152,6 @@ class LocalNotifications {
   }
 
   static Future<void> cancelReminder(String id) async {
-    if (_ready) await _plugin.cancel(id: id.hashCode & 0x7fffffff);
+    if (_ready) await _plugin.cancel(id: stableId(id));
   }
 }

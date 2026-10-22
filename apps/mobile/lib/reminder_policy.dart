@@ -60,7 +60,7 @@ class ReminderPolicy {
       if (!eligibleGeneric(n)) continue;
       result.add({
         ...n,
-        '_token': n['id'],
+        '_token': n['delivery_token'] ?? n['id'],
         '_priority': n['severity'] == 'critical' ? 4 : 2
       });
     }
@@ -82,7 +82,7 @@ class ReminderPolicy {
         at > now.millisecondsSinceEpoch + 120000) {
       return true;
     }
-    return priority > previous || now.millisecondsSinceEpoch - at >= 600000;
+    return now.millisecondsSinceEpoch - at >= 1800000;
   }
 
   static String remainingLabel(num value) {

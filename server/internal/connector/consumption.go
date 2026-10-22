@@ -26,23 +26,27 @@ type consumptionGeneration struct {
 	Points   []consumptionPoint `json:"points"`
 }
 
-type consumptionSeries struct {
-	BucketStart   string   `json:"bucket_start"`
-	ConsumedPP    *float64 `json:"consumed_pp"`
-	LevelEnd      *float64 `json:"level_end"`
-	PeakPPHour    *float64 `json:"peak_pp_hour"`
-	Resets        *int     `json:"resets"`
-	CoverageHours int      `json:"coverage_hours"`
-}
-
 type consumptionWindow struct {
 	ID              string `json:"id"`
 	DurationMinutes int64  `json:"duration_minutes"`
 	Present         bool   `json:"present"`
 }
 
+// effectiveWindowFilter keeps different quota windows from being summed into
+// one number (plan rule 7): an unspecified window means the primary weekly
+// quota, never "all windows added together".
+func effectiveWindowFilter(filter, plan string) string {
+	if filter == "" {
+		return "10080"
+	}
+	return filter
+}
+
 // Consumption serves the daily/weekly/monthly usage views backed by the
 // hourly rollup, plus the live per-generation series for the current window.
+// Aggregates uploaded by desktops (offline periods the server never saw as
+// raw samples) fill the buckets the rollup lacks, without ever summing two
+// sources over the same bucket (plan section 4.2).
 func (s *Service) Consumption(w http.ResponseWriter, r *http.Request) {
 	uid := auth.Who(r).UserID
 	granularity := r.URL.Query().Get("granularity")
@@ -52,6 +56,14 @@ func (s *Service) Consumption(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, 400, "invalid_granularity", "granularity 取值非法")
 		return
 	}
+	backup, hasBackup := s.freshestBackup(r.Context(), uid)
+	var backupAt time.Time
+	if hasBackup {
+		backupAt = backup.ObservedFreshness()
+	}
+	liveAt, hasLive := s.liveDataAsOf(r.Context(), uid)
+	dataAsOf := later(liveAt, backupAt)
+
 	tz := s.tzOffsetMinutes(r.Context(), uid)
 	if v := r.URL.Query().Get("tz_offset"); v != "" {
 		if n, e := strconv.Atoi(v); e == nil && n >= -720 && n <= 840 {
@@ -65,13 +77,15 @@ func (s *Service) Consumption(w http.ResponseWriter, r *http.Request) {
 		plan = "unknown"
 	}
 	if granularity == "hourly" {
-		out, e := s.consumptionHourly(r.Context(), uid, now, r.URL.Query(), plan)
+		out, e := s.consumptionHourly(r.Context(), uid, now, r.URL.Query(), plan, backup)
 		if e != nil {
 			httpx.Error(w, 503, "unavailable", "消耗数据暂不可用")
 			return
 		}
 		out["plan_type"] = plan
 		out["tz_offset_minutes"] = tz
+		out["data_as_of"] = observationValue(dataAsOf)
+		out["stale_reason"] = staleReason("hourly", dataAsOf, now)
 		httpx.WriteJSON(w, 200, out)
 		return
 	}
@@ -81,12 +95,14 @@ func (s *Service) Consumption(w http.ResponseWriter, r *http.Request) {
 	// Both paths first replay any raw samples the rollup does not cover yet
 	// (initial backfill and self-healing after a missed rollup write).
 	if granularity == "window" {
-		out, e := s.consumptionWindow(r.Context(), uid, now, loc, r.URL.Query().Get("window"), plan)
+		out, e := s.consumptionWindow(r.Context(), uid, now, loc, r.URL.Query().Get("window"), plan, backup, liveAt)
 		if e != nil {
 			httpx.Error(w, 503, "unavailable", "消耗数据暂不可用")
 			return
 		}
 		out["tz_offset_minutes"] = tz
+		out["data_as_of"] = observationValue(dataAsOf)
+		out["stale_reason"] = staleReason("window", dataAsOf, now)
 		httpx.WriteJSON(w, 200, out)
 		return
 	}
@@ -101,7 +117,10 @@ func (s *Service) Consumption(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, 503, "unavailable", "消耗数据暂不可用")
 		return
 	}
-	rows, e := s.DB.QueryContext(r.Context(), `SELECT hour_bucket,window_key,consumed_pp,samples,resets,level_last FROM codex_usage_rollup WHERE bridge_id IN (SELECT id FROM codex_bridges WHERE user_id=$1 AND revoked_at IS NULL) AND hour_bucket>now()-($2 * interval '1 day')`, uid, days+1)
+	// One effective source per hour bucket: when several computers observe
+	// the same account, the most recently active collector wins and the
+	// others only fill hours it never covered. Devices are never summed.
+	rows, e := s.DB.QueryContext(r.Context(), `SELECT hour_bucket,window_key,consumed_pp,samples,resets,level_last FROM (SELECT r.hour_bucket,r.window_key,r.consumed_pp,r.samples,r.resets,r.level_last,row_number() OVER (PARTITION BY r.hour_bucket,r.window_key ORDER BY COALESCE(st.last_observed_at,to_timestamp(0)) DESC,r.samples DESC,r.bridge_id) AS rn FROM codex_usage_rollup r JOIN codex_bridges b ON b.id=r.bridge_id AND b.user_id=$1 AND b.revoked_at IS NULL LEFT JOIN codex_usage_rollup_state st ON st.bridge_id=r.bridge_id WHERE r.hour_bucket>now()-($2 * interval '1 day')) ranked WHERE rn=1`, uid, days+1)
 	if e != nil {
 		httpx.Error(w, 503, "unavailable", "消耗数据暂不可用")
 		return
@@ -131,7 +150,7 @@ func (s *Service) Consumption(w http.ResponseWriter, r *http.Request) {
 	rows.Close()
 
 	// Apply plan visibility before aggregating; raw rollups remain available for plan changes.
-	windowFilter := r.URL.Query().Get("window")
+	windowFilter := effectiveWindowFilter(r.URL.Query().Get("window"), plan)
 	{
 		kept := hours[:0]
 		for _, h := range hours {
@@ -164,7 +183,6 @@ func (s *Service) Consumption(w http.ResponseWriter, r *http.Request) {
 		hoursCount int
 	}
 	byBucket := map[string]*agg{}
-	firstDay := ""
 	for _, h := range hours {
 		label := bucketLabel(h.hour)
 		a := byBucket[label]
@@ -182,20 +200,17 @@ func (s *Service) Consumption(w http.ResponseWriter, r *http.Request) {
 		if h.consumed > a.peak {
 			a.peak = h.consumed
 		}
-		if firstDay == "" || label < firstDay {
-			firstDay = label
-		}
 	}
 
 	// Build the full calendar series so the front end can render gaps honestly.
 	rangeStart := bucketStart(now.Add(-time.Duration(days)*24*time.Hour), loc, granularity)
-	series := []consumptionSeries{}
+	series := []bucketCoverage{}
 	for cur := rangeStart; !cur.After(bucketStart(now, loc, granularity)); cur = nextBucket(cur, loc, granularity) {
 		label := cur.Format("2006-01-02")
 		if granularity == "weekly" {
 			label = cur.Format("2006-01-02")
 		}
-		entry := consumptionSeries{BucketStart: label, CoverageHours: 0}
+		entry := bucketCoverage{BucketStart: label, CoverageHours: 0}
 		if a := byBucket[label]; a != nil {
 			entry.ConsumedPP = &a.consumed
 			entry.PeakPPHour = &a.peak
@@ -209,15 +224,30 @@ func (s *Service) Consumption(w http.ResponseWriter, r *http.Request) {
 		series = append(series, entry)
 	}
 
+	// Desktop aggregates fill the calendar buckets the rollup lacks; the two
+	// sources are never added over the same bucket.
+	usedBackup := false
+	if granularity == "daily" && hasBackup {
+		if key := windowFilter + ":daily"; codex.WindowVisibleForPlan(plan, windowDuration(windowFilter)) {
+			if backupRows := backupSeries(backup, key); len(backupRows) > 0 {
+				series, usedBackup = mergeSeries(series, backupRows)
+			}
+		}
+	}
+
 	// Window capability from the newest snapshot among the account's bridges.
 	var latestRaw []byte
 	_ = s.DB.QueryRowContext(r.Context(), `SELECT snapshot FROM codex_bridges WHERE user_id=$1 AND revoked_at IS NULL ORDER BY received_at DESC LIMIT 1`, uid).Scan(&latestRaw)
 	windows := windowCapability(latestRaw, plan)
 
 	daysWithData := 0
+	firstDay := ""
 	for _, e := range series {
 		if e.ConsumedPP != nil {
 			daysWithData++
+			if firstDay == "" || e.BucketStart < firstDay {
+				firstDay = e.BucketStart
+			}
 		}
 	}
 	reference := 0.0
@@ -255,6 +285,7 @@ func (s *Service) Consumption(w http.ResponseWriter, r *http.Request) {
 			compare["ratio"] = thisPP / prevPP
 		}
 	}
+	empty := len(hours) == 0 && !usedBackup
 	httpx.WriteJSON(w, 200, map[string]any{
 		"generated_at":       now,
 		"tz_offset_minutes":  tz,
@@ -265,12 +296,42 @@ func (s *Service) Consumption(w http.ResponseWriter, r *http.Request) {
 		"reference_pp":       reference,
 		"plan_type":          plan,
 		"compare":            compare,
+		"data_as_of":         observationValue(dataAsOf),
+		"source":             sourceLabel(hasLive, usedBackup, empty),
+		"stale_reason":       staleReason(granularity, dataAsOf, now),
 	})
+}
+
+// windowDuration maps a window filter value to its duration in minutes.
+func windowDuration(filter string) int64 {
+	if filter == "300" {
+		return 300
+	}
+	return 10080
 }
 
 // consumptionWindow returns the raw per-generation series for the live
 // window view; every generation (reset) breaks the line.
-func (s *Service) consumptionWindow(ctx context.Context, uid string, now time.Time, loc *time.Location, windowFilter string, plan string) (map[string]any, error) {
+func (s *Service) consumptionWindow(ctx context.Context, uid string, now time.Time, loc *time.Location, windowFilter string, plan string, backup LocalBackup, liveAt time.Time) (map[string]any, error) {
+	var latestRaw []byte
+	_ = s.DB.QueryRowContext(ctx, `SELECT snapshot FROM codex_bridges WHERE user_id=$1 AND revoked_at IS NULL ORDER BY received_at DESC LIMIT 1`, uid).Scan(&latestRaw)
+	windows := windowCapability(latestRaw, plan)
+	// The desktop has observed samples the server never received as raw
+	// history: serve its stored series instead of the stale live one.
+	if windowFilter != "" && len(backup.Consumption) > 0 && codex.WindowVisibleForPlan(plan, windowDuration(windowFilter)) {
+		if backupAt := backup.Freshness(); liveAt.IsZero() || backupAt.After(liveAt) {
+			if value := backup.Consumption[windowFilter+":window"]; len(value) > 0 {
+				var out map[string]any
+				if json.Unmarshal(value, &out) == nil {
+					if _, ok := out["windows"]; !ok {
+						out["windows"] = windows
+					}
+					out["source"] = "local_backup"
+					return out, nil
+				}
+			}
+		}
+	}
 	rows, e := s.DB.QueryContext(ctx, `SELECT observed_at,snapshot FROM codex_history WHERE bridge_id IN (SELECT id FROM codex_bridges WHERE user_id=$1 AND revoked_at IS NULL) AND observed_at>now()-interval '7 days' ORDER BY observed_at`, uid)
 	if e != nil {
 		return nil, e
@@ -283,14 +344,12 @@ func (s *Service) consumptionWindow(ctx context.Context, uid string, now time.Ti
 		Points   []consumptionPoint
 	}
 	gens := []*gen{}
-	latest := []byte{}
 	for rows.Next() {
 		var observed time.Time
 		var raw []byte
 		if e = rows.Scan(&observed, &raw); e != nil {
 			return nil, e
 		}
-		latest = raw
 		var snap codex.Snapshot
 		if json.Unmarshal(raw, &snap) != nil {
 			continue
@@ -323,6 +382,9 @@ func (s *Service) consumptionWindow(ctx context.Context, uid string, now time.Ti
 		}
 	}
 	rows.Close()
+	if e = rows.Err(); e != nil {
+		return nil, e
+	}
 	outGens := []consumptionGeneration{}
 	for _, g := range gens {
 		if len(g.Points) == 0 {
@@ -330,7 +392,7 @@ func (s *Service) consumptionWindow(ctx context.Context, uid string, now time.Ti
 		}
 		outGens = append(outGens, consumptionGeneration{ResetsAt: g.ResetsAt, Start: g.Start.Format(time.RFC3339), End: g.End.Format(time.RFC3339), Points: g.Points})
 	}
-	return map[string]any{"generated_at": now, "windows": windowCapability(latest, plan), "generations": outGens, "plan_type": plan}, nil
+	return map[string]any{"generated_at": now, "windows": windows, "generations": outGens, "plan_type": plan, "source": "server_rollup"}, nil
 }
 
 // windowCapability reports which window durations the newest snapshot carried.
@@ -525,7 +587,7 @@ func visibleConsumptionKey(key, filter, plan string) bool {
 
 // consumptionHourly returns the per-hour consumed series from the rollup,
 // optionally filtered to one window duration.
-func (s *Service) consumptionHourly(ctx context.Context, uid string, now time.Time, qp url.Values, plan string) (map[string]any, error) {
+func (s *Service) consumptionHourly(ctx context.Context, uid string, now time.Time, qp url.Values, plan string, backup LocalBackup) (map[string]any, error) {
 	hours := 24
 	if v := qp.Get("hours"); v != "" {
 		if n, e := strconv.Atoi(v); e == nil && n >= 1 && n <= 168 {
@@ -535,13 +597,14 @@ func (s *Service) consumptionHourly(ctx context.Context, uid string, now time.Ti
 	if e := s.ensureRollups(ctx, uid); e != nil {
 		return nil, e
 	}
-	rows, e := s.DB.QueryContext(ctx, `SELECT hour_bucket,window_key,consumed_pp,samples,resets FROM codex_usage_rollup WHERE bridge_id IN (SELECT id FROM codex_bridges WHERE user_id=$1 AND revoked_at IS NULL) AND hour_bucket>now()-($2 * interval '1 hour') ORDER BY hour_bucket`, uid, hours)
+	windowFilter := effectiveWindowFilter(qp.Get("window"), plan)
+	// One effective source per hour bucket across all observing devices.
+	rows, e := s.DB.QueryContext(ctx, `SELECT hour_bucket,window_key,consumed_pp,samples,resets FROM (SELECT r.hour_bucket,r.window_key,r.consumed_pp,r.samples,r.resets,row_number() OVER (PARTITION BY r.hour_bucket,r.window_key ORDER BY COALESCE(st.last_observed_at,to_timestamp(0)) DESC,r.samples DESC,r.bridge_id) AS rn FROM codex_usage_rollup r JOIN codex_bridges b ON b.id=r.bridge_id AND b.user_id=$1 AND b.revoked_at IS NULL LEFT JOIN codex_usage_rollup_state st ON st.bridge_id=r.bridge_id WHERE r.hour_bucket>now()-($2 * interval '1 hour')) ranked WHERE rn=1 ORDER BY hour_bucket`, uid, hours)
 	if e != nil {
 		return nil, e
 	}
 	defer rows.Close()
-	windowFilter := qp.Get("window")
-	hourly := []map[string]any{}
+	live := []hourlyEntry{}
 	for rows.Next() {
 		var hour time.Time
 		var key string
@@ -553,10 +616,28 @@ func (s *Service) consumptionHourly(ctx context.Context, uid string, now time.Ti
 		if !visibleConsumptionKey(key, windowFilter, plan) {
 			continue
 		}
-		hourly = append(hourly, map[string]any{"hour": hour.Format(time.RFC3339), "consumed_pp": consumed, "samples": samples, "resets": resets})
+		live = append(live, hourlyEntry{Hour: hour.Format(time.RFC3339), Consumed: consumed, Samples: samples, Resets: resets})
 	}
 	if e = rows.Err(); e != nil {
 		return nil, e
 	}
-	return map[string]any{"hours": hours, "hourly": hourly}, nil
+	// Desktop hourly aggregates fill hours the rollup lacks.
+	var backupRows []hourlyEntry
+	if codex.WindowVisibleForPlan(plan, windowDuration(windowFilter)) {
+		backupRows = backupHourly(backup, windowFilter+":hourly")
+	}
+	merged, usedBackup := mergeHourly(live, backupRows)
+	out := []map[string]any{}
+	for _, row := range merged {
+		out = append(out, map[string]any{"hour": row.Hour, "consumed_pp": row.Consumed, "samples": row.Samples, "resets": row.Resets})
+	}
+	return map[string]any{"hours": hours, "hourly": out, "source": sourceLabel(len(live) > 0, usedBackup, len(merged) == 0)}, nil
+}
+
+// Unknown observation time stays null, never response time or year 0001.
+func observationValue(at time.Time) any {
+	if at.IsZero() {
+		return nil
+	}
+	return at
 }

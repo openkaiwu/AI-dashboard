@@ -28,7 +28,8 @@ class _InboxPageState extends State<InboxPage> {
   void initState() {
     super.initState();
     unawaited(refresh());
-    timer = Timer.periodic(const Duration(minutes: 2), (_) => unawaited(refresh()));
+    timer =
+        Timer.periodic(const Duration(minutes: 2), (_) => unawaited(refresh()));
   }
 
   @override
@@ -79,15 +80,24 @@ class _InboxPageState extends State<InboxPage> {
 
   Future<void> readOne(String id) async {
     try {
-      await widget.api.call('POST', '/api/v1/notifications/${Uri.encodeComponent(id)}/read');
+      await widget.api.call(
+          'POST', '/api/v1/notifications/${Uri.encodeComponent(id)}/read');
       await refresh();
     } catch (_) {
       if (mounted) setState(() => error = '暂时无法标记已读');
     }
   }
-  Future<void> act(String id,String action) async {
-    try { await widget.api.call('POST','/api/v1/notifications/${Uri.encodeComponent(id)}/action',{'action':action}); await refresh(); }
-    catch (_) { if(mounted) setState(()=>error='暂时无法处理提醒'); }
+
+  Future<void> act(String id, String action) async {
+    try {
+      await widget.api.call(
+          'POST',
+          '/api/v1/notifications/${Uri.encodeComponent(id)}/action',
+          {'action': action});
+      await refresh();
+    } catch (_) {
+      if (mounted) setState(() => error = '暂时无法处理提醒');
+    }
   }
 
   String when(dynamic value) => value == null
@@ -103,9 +113,11 @@ class _InboxPageState extends State<InboxPage> {
         children: [
           Row(children: [
             Expanded(
-              child: Text('通知中心', style: Theme.of(context).textTheme.headlineSmall),
+              child: Text('通知中心',
+                  style: Theme.of(context).textTheme.headlineSmall),
             ),
-            TextButton(onPressed: busy ? null : readAll, child: const Text('全部已读')),
+            TextButton(
+                onPressed: busy ? null : readAll, child: const Text('全部已读')),
           ]),
           const SizedBox(height: 8),
           const Text('同一提醒在条件解除前不会重复轰炸。点击可切换对应模式。'),
@@ -138,14 +150,29 @@ class _InboxPageState extends State<InboxPage> {
                     ],
                   ),
                   trailing: n['status'] == 'unread'
-                      ? PopupMenuButton<String>(onSelected:(action)=>act(n['id'] as String,action),itemBuilder:(_)=>const [PopupMenuItem(value:'read',child:Text('已读')),PopupMenuItem(value:'snooze',child:Text('一小时后提醒')),PopupMenuItem(value:'dismiss',child:Text('忽略本次'))])
-                      : Text(n['status']=='snoozed'?'稍后提醒':n['status']=='dismissed'?'已忽略':'已读',style: const TextStyle(color: HubTheme.muted)),
+                      ? PopupMenuButton<String>(
+                          onSelected: (action) =>
+                              act(n['id'] as String, action),
+                          itemBuilder: (_) => const [
+                                PopupMenuItem(value: 'read', child: Text('已读')),
+                                PopupMenuItem(
+                                    value: 'dismiss', child: Text('忽略本次'))
+                              ])
+                      : Text(
+                          n['status'] == 'snoozed'
+                              ? '已暂缓'
+                              : n['status'] == 'dismissed'
+                                  ? '已忽略'
+                                  : '已读',
+                          style: const TextStyle(color: HubTheme.muted)),
                   onTap: () {
                     final slug = n['provider_slug'] as String?;
                     if (slug == 'cursor' || slug == 'codex') {
                       widget.onModeSwitch(slug!);
                     }
-                    if (n['status'] == 'unread') unawaited(readOne(n['id'] as String));
+                    if (n['status'] == 'unread') {
+                      unawaited(readOne(n['id'] as String));
+                    }
                   },
                 ),
               ),

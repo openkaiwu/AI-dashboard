@@ -4,27 +4,35 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="theme-color" content="#f6f8fc" />
-  <title>AI Hub v1.1.4 · 全平台下载</title>
+  <title>AI Hub v1.1.7 · Windows / Android 更新</title>
   <style>
     *{box-sizing:border-box}body{margin:0;background:#f6f8fc;color:#18243c;font:15px/1.7 system-ui,-apple-system,"Segoe UI",sans-serif}main{max-width:960px;margin:auto;padding:56px max(20px,env(safe-area-inset-left)) calc(40px + env(safe-area-inset-bottom))}header{margin-bottom:30px}.badge{color:#3563e9;font-size:13px;font-weight:650}h1{text-wrap:balance;font-size:36px;margin:10px 0}h2{font-size:21px;margin:0 0 8px}p{margin:8px 0 18px}.muted{color:#63718a;font-size:14px}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px}.card{padding:24px;background:white;border:1px solid #e3e9f2;border-radius:16px}.links{display:flex;flex-wrap:wrap;gap:10px}a{color:#2953ce}a.btn{display:inline-flex;align-items:center;justify-content:center;min-height:44px;padding:10px 16px;background:#3563e9;color:white;text-decoration:none;border-radius:9px;font-weight:600;font-size:14px}.btn.secondary{background:#edf2ff;color:#2953ce}a:focus-visible{outline:3px solid #18243c;outline-offset:3px}small{display:block;margin-top:14px;color:#63718a}code{overflow-wrap:anywhere;background:#edf2ff;padding:2px 5px;border-radius:4px}.note{margin-top:20px;padding:22px;border:1px solid #e3e9f2;border-radius:14px;background:#fff}.note p:last-child{margin-bottom:0}@media(max-width:640px){main{padding-top:28px}.grid{grid-template-columns:1fr}h1{font-size:29px}.card{padding:20px}.links .btn{flex:1}.links{gap:8px}}
+
+    .site-tabs{display:flex;gap:6px;align-items:center;width:fit-content;max-width:100%;padding:5px;border:1px solid #e3e9f2;border-radius:12px;background:#edf1f8;margin:0 0 30px}.site-tabs a{display:inline-flex;align-items:center;justify-content:center;min-height:44px;padding:9px 20px;border-radius:8px;text-decoration:none;color:#63718a;font-weight:650;white-space:nowrap}.site-tabs a[aria-current="page"]{background:white;color:#2953ce;box-shadow:0 2px 5px #18243c0a}
   </style>
 </head>
 <body><main>
-  <header><span class="badge">AI HUB · v1.1.4 · 2026-10-13</span><h1>每台设备，同一个工作空间</h1><p class="muted">额度总览、消耗分析、跨设备提醒和便笺。选择适合你设备的安装包，登录自己的服务器。</p></header>
+  <nav class="site-tabs" aria-label="软件下载分类">
+    <a data-site-nav href="/downloads/index.html" aria-current="page">AI Hub</a>
+    <a data-site-nav href="/downloads/timezone.html">时区切换</a>
+    <a data-site-nav href="/downloads/netscope.html">NetScope</a>
+  </nav>
+
+  <header><span class="badge">AI HUB · v1.1.7 · 2026-10-22</span><h1>看清数据时间，断网也能接续同步</h1><p class="muted">Windows 与 Android 已更新至 v1.1.7：真实采集时间与来源、断网补传、重复上传去重及多源统计修复；保留桌面静默与手机单次提醒。其他平台保留 v1.1.4 下载。</p></header>
   <div class="grid">
-    <section class="card"><h2>Windows</h2><p class="muted">Windows 10 / 11 · x64 · 安装后可覆盖更新。</p><div class="links"><a class="btn" data-download href="/downloads/AIHub-正式版v1.1.4.exe">下载安装包</a><a class="btn secondary" data-download href="/downloads/desktop/AIHub-Setup.exe">稳定下载链接</a></div><small>安装包尚未配置发布者签名。</small></section>
-    <section class="card"><h2>Android</h2><p class="muted">原生移动界面 · v1.1.4（构建号 8）。</p><div class="links"><a class="btn" data-download href="/downloads/AIHub-正式版v1.1.4.apk">下载 APK</a></div><small>使用现有调试签名构建；从当前服务器安装的同签名版本可覆盖更新。</small></section>
-    <section class="card"><h2>macOS</h2><p class="muted">分别支持 Apple Silicon 与 Intel 芯片。</p><div class="links"><a class="btn" data-download href="/downloads/AIHub-1.1.4-arm64.dmg">Apple Silicon</a><a class="btn secondary" data-download href="/downloads/AIHub-1.1.4-x64.dmg">Intel</a></div><small>未配置 Developer ID 签名与公证；系统可能拦截首次打开。请先核对文件校验值。</small></section>
-    <section class="card"><h2>Linux</h2><p class="muted">Ubuntu / Debian 安装包与 AppImage。</p><div class="links"><a class="btn" data-download href="/downloads/AIHub-1.1.4-linux-x64.AppImage">x64 AppImage</a><a class="btn secondary" data-download href="/downloads/AIHub-1.1.4-linux-x64.deb">x64 deb</a><a class="btn secondary" data-download href="/downloads/AIHub-1.1.4-linux-arm64.AppImage">ARM64 AppImage</a><a class="btn secondary" data-download href="/downloads/AIHub-1.1.4-linux-arm64.deb">ARM64 deb</a></div><small>AppImage 需赋予执行权限；桌面凭据保护需要系统密钥环。</small></section>
-    <section class="card"><h2>iPhone / iPad</h2><p class="muted">iOS 15+ · 原生移动界面 · v1.1.4。</p><div class="links"><a class="btn" data-download href="/downloads/AIHub-1.1.4-unsigned.ipa">下载待签名 IPA</a></div><small>IPA 未签名，不能直接点开安装，需要自己的 Apple 签名与设备配置。也可以在 Safari 打开服务器的 HTTPS 工作台，通过分享菜单添加到主屏幕。</small></section>
-    <section class="card"><h2>采集器与校验</h2><p class="muted">桌面安装包已包含对应架构的 Codex / Cursor 采集器。</p><div class="links"><a class="btn secondary" data-download href="/downloads/AIHub-Codex-Collector-Windows-latest.zip">Windows 独立采集器</a><a class="btn secondary" data-download href="/downloads/SHA256SUMS-latest.txt">SHA-256 校验清单</a></div><small>Windows：<code>Get-FileHash 文件名 -Algorithm SHA256</code><br>macOS：<code>shasum -a 256 文件名</code><br>Linux：<code>sha256sum 文件名</code></small></section>
+    <section class="card"><h2>Windows</h2><p class="muted">Windows 10 / 11 · x64 · v1.1.7 · 覆盖更新保留数据。</p><div class="links"><a class="btn" data-download href="/downloads/AIHub-正式版v1.1.7.exe">下载安装包</a><a class="btn secondary" data-download href="/downloads/desktop/AIHub-Setup.exe">稳定下载链接</a></div><small>安装包尚未配置发布者签名。</small></section>
+    <section class="card"><h2>Android</h2><p class="muted">原生移动界面 · v1.1.7（构建号 11）。</p><div class="links"><a class="btn" data-download href="/downloads/AIHub-正式版v1.1.7.apk">下载 APK</a></div><small>使用现有调试签名构建；从当前服务器安装的同签名版本可覆盖更新。</small></section>
+    <section class="card"><h2>macOS</h2><p class="muted">v1.1.4 · 分别支持 Apple Silicon 与 Intel 芯片。</p><div class="links"><a class="btn" data-archive="1.1.4" href="/downloads/AIHub-1.1.4-arm64.dmg">Apple Silicon</a><a class="btn secondary" data-archive="1.1.4" href="/downloads/AIHub-1.1.4-x64.dmg">Intel</a></div><small>未配置 Developer ID 签名与公证；系统可能拦截首次打开。请先核对文件校验值。</small></section>
+    <section class="card"><h2>Linux</h2><p class="muted">v1.1.4 · Ubuntu / Debian 安装包与 AppImage。</p><div class="links"><a class="btn" data-archive="1.1.4" href="/downloads/AIHub-1.1.4-linux-x64.AppImage">x64 AppImage</a><a class="btn secondary" data-archive="1.1.4" href="/downloads/AIHub-1.1.4-linux-x64.deb">x64 deb</a><a class="btn secondary" data-archive="1.1.4" href="/downloads/AIHub-1.1.4-linux-arm64.AppImage">ARM64 AppImage</a><a class="btn secondary" data-archive="1.1.4" href="/downloads/AIHub-1.1.4-linux-arm64.deb">ARM64 deb</a></div><small>AppImage 需赋予执行权限；桌面凭据保护需要系统密钥环。</small></section>
+    <section class="card"><h2>iPhone / iPad</h2><p class="muted">iOS 15+ · 原生移动界面 · v1.1.4。</p><div class="links"><a class="btn" data-archive="1.1.4" href="/downloads/AIHub-1.1.4-unsigned.ipa">下载待签名 IPA</a></div><small>IPA 未签名，不能直接点开安装，需要自己的 Apple 签名与设备配置。也可以在 Safari 打开服务器的 HTTPS 工作台，通过分享菜单添加到主屏幕。</small></section>
+    <section class="card"><h2>采集器与校验</h2><p class="muted">桌面安装包已包含对应架构的 Codex / Cursor 采集器。</p><div class="links"><a class="btn secondary" data-archive="1.1.4" href="/downloads/AIHub-Codex-Collector-Windows-latest.zip">Windows 独立采集器 v1.1.4</a><a class="btn secondary" data-download href="/downloads/SHA256SUMS-latest.txt">SHA-256 校验清单</a></div><small>Windows：<code>Get-FileHash 文件名 -Algorithm SHA256</code><br>macOS：<code>shasum -a 256 文件名</code><br>Linux：<code>sha256sum 文件名</code></small></section>
   </div>
-  <aside class="note"><strong>连接与提醒</strong><p class="muted">桌面端可登录 HTTPS 服务器，也可使用需要 PostgreSQL 的本地模式。手机端连接服务器；系统通知需要授权。iOS 后台持续采集与远程推送尚未提供，关闭应用后不会持续轮询。</p><p class="muted">下载页默认使用 HTTP 8888 端口。工作台登录使用管理员提供的 HTTPS 地址。各平台安装包已构建验证；真机通知和系统安装体验仍需在目标设备验收。</p></aside>
+  <aside class="note"><strong>连接与提醒</strong><p class="muted">消耗数据默认保存在电脑本地；在消耗分析或提醒设置中点击「立即同步到手机」，或打开自动同步。Windows 卸载时默认保留本地数据，明确选择删除才清除。Android 覆盖安装保留数据；Android 10+ 标准卸载界面可选择保留应用数据，部分厂商界面可能不同。手机「提醒设置」可指定主提醒手机、开启后台同步并检查通知与横幅权限、电池限制；同一事件只提醒一次，至少间隔 30 分钟合并提醒。已修复消耗分析失败阻断通知的问题。实时推送尚未接入；系统约每 15 分钟安排检查，省电与强制停止可能延迟。iOS 后台持续采集与远程推送尚未提供，关闭应用后不会持续轮询。</p><p class="muted">下载页默认使用 HTTP 8888 端口。工作台登录使用管理员提供的 HTTPS 地址。各平台安装包已构建验证；真机通知和系统安装体验仍需在目标设备验收。</p></aside>
 <script>
   const downloads = new URL('/downloads/', window.location.href);
   downloads.protocol = 'http:';
   downloads.port = '8888';
-  document.querySelectorAll('a[data-download]').forEach(link => {
+  document.querySelectorAll('a[data-download],a[data-archive],a[data-site-nav]').forEach(link => {
     link.href = new URL(link.getAttribute('href').replace(/^\/downloads\//, ''), downloads).href;
   });
 </script>

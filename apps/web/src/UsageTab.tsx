@@ -10,6 +10,7 @@ type Range='24h'|'7d'|'30d';
 const ranges:Range[]=['24h','7d','30d'];
 const labels:Record<Range,string>={'24h':'近 24 小时','7d':'近 7 天','30d':'近 30 天'};
 const when=(date:string)=>new Date(date).toLocaleString();
+const sourceLabels:Record<string,string>={local_backup:'本机备份聚合',merged:'服务器与本机备份合并',server_rollup:'服务器采样',none:'暂无采集来源'};
 
 export default function UsageTab({planType}:{planType:string}) {
   const [basis,setBasis]=useState('10080');
@@ -29,7 +30,7 @@ export default function UsageTab({planType}:{planType:string}) {
       void request<UsageData>('/api/v1/codex/consumption?'+query,{signal:AbortSignal.any([controller.signal,AbortSignal.timeout(15000)])}).then(data=>{
         const rows=key==='five'?data.generations:key==='hourly'?data.hourly:data.series;
         if(!Array.isArray(rows))throw new Error('Missing consumption series');
-        return {...data,generated_at:data.generated_at||new Date().toISOString()};
+        return data;
       }).catch(()=>undefined).then(data=>{
         if(!active||scopeRef.current!==scope)return;
         setResult(previous=>({scope,resources:{...previous.resources,[key]:settleResource(previous.resources[key],data)}}));
@@ -66,7 +67,7 @@ export function ConsumptionView({planType,basis,onBasis,range,onRange,resources,
           <div className="consumption-insights"><div><span>已记录消耗</span><strong>{total.toFixed(1)}<small> pp</small></strong></div><div><span>{range==='24h'?'有样本小时均值':'有样本日均'}</span><strong>{(total/known.length).toFixed(1)}<small> pp</small></strong></div><div><span>样本覆盖</span><strong>{known.length}<small> / {series.length} {range==='24h'?'小时':'天'}</small></strong></div></div>
           {known.length<series.length&&<p className="muted compact">存在采集空档，合计只包含已记录部分；空档不代表零消耗。</p>}
         </>}
-        {selected.data?.generated_at&&<p className={'consumption-updated'+(selected.error?' stale':'')}>{selected.error?'刷新失败，显示上次成功获取的数据':'数据更新于'} · {when(selected.data.generated_at)}</p>}
+        {selected.data&&<p className={'consumption-updated'+(selected.error?' stale':'')}>{selected.error?'刷新失败，显示上次成功获取的数据 · ':''}{selected.data.data_as_of&&Number.isFinite(Date.parse(selected.data.data_as_of))?`数据截至 ${when(selected.data.data_as_of)}`:'采集时间未知'}{selected.data.source?` · 来源：${sourceLabels[selected.data.source]??selected.data.source}`:''}{selected.data.stale_reason==='stale_source'?' · 数据已滞后，请检查采集或同步状态':''}{selected.data.stale_reason==='no_source'?' · 尚无任何采集来源':''}</p>}
       </section>
     </>}
     <p className="consumption-footnote"><Info size={15} aria-hidden="true"/><span>1 个百分点表示本窗口完整额度的 1%。不同额度窗口分别统计；重置不算消耗，真实零消耗才显示 0。</span></p>
