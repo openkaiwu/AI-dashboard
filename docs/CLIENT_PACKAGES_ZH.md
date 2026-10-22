@@ -1,11 +1,13 @@
-# 全平台客户端 · v1.1.4
+# 客户端下载与安装
+
+2026-10-22：Windows / Android 更新至 v1.1.7；macOS / Linux / iOS 保留 v1.1.4。各平台版本和验收状态分别记录，详见 [v1.1.7 发布记录](RELEASE_V1_1_7_ZH.md)。
 
 下载页：`http://<服务器地址>:8888/`。登录工作台时使用管理员提供的 **HTTPS** 根地址。真实部署地址与凭据不写入源码。
 
 | 平台 | 安装包 | 签名状态 |
 | --- | --- | --- |
-| Windows x64 | `AIHub-正式版v1.1.4.exe` | 未配置 Authenticode 签名 |
-| Android | `AIHub-正式版v1.1.4.apk` | 沿用现有 Android Debug 签名，构建号 8 |
+| Windows x64 | `AIHub-正式版v1.1.7.exe` | 未配置 Authenticode 签名 |
+| Android | `AIHub-正式版v1.1.7.apk` | 沿用现有 Android Debug 签名，构建号 11 |
 | macOS Apple Silicon | `AIHub-1.1.4-arm64.dmg` / `.zip` | 无 Developer ID 签名与公证 |
 | macOS Intel | `AIHub-1.1.4-x64.dmg` / `.zip` | 无 Developer ID 签名与公证 |
 | Linux x64 | `AIHub-1.1.4-linux-x64.AppImage` / `.deb` | 未签名 |
@@ -28,6 +30,8 @@ iOS IPA 需要自己的 Apple 签名及设备配置，不能当作 App Store/Tes
 ## 提醒与同步边界
 
 各平台共享额度总览、消耗分析、提醒处理状态和便笺。桌面采集器默认每 60 秒采集一次，手机端从服务器读取数据。原生通知需要系统权限。
+
+Windows/Web 与 Android v1.1.7 的消耗图显示观察时间和来源；无法确认观察时间时显示“采集时间未知”。桌面默认静默；Android 需指定主提醒手机并开启后台检查，系统约每 15 分钟安排任务，受省电、离线及强制停止影响。FCM 实时推送尚未接入。
 
 iOS 当前没有 APNs 远程推送，也不能在关闭应用后持续后台轮询。签名、真机安装、后台生命周期和目标系统通知体验需要在相应设备验收；构建成功不等于完成这些验收。
 
