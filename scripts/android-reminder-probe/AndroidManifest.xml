@@ -1,0 +1,5 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="dev.aihub.reminderqa">
+  <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="34"/>
+  <application android:label="AI Hub Reminder QA"/>
+  <instrumentation android:name="qa.ReminderProbe" android:targetPackage="dev.aihub.aihub_mobile"/>
+</manifest>

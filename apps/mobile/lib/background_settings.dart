@@ -5,18 +5,31 @@ import 'store.dart';
 import 'background_sync.dart';
 import 'local_notifications.dart';
 
-String notificationCondition(Object? value) => const {
- 'permission_denied':'未允许应用通知', 'channel_missing':'通知渠道尚未创建',
- 'channel_blocked':'额度通知渠道已关闭', 'tray_only':'仅通知栏，横幅条件不足',
- 'heads_up_conditions':'具备横幅条件，仍受系统设置影响',
- 'duplicate':'已提醒，不重复发送', 'quiet_hours':'免打扰时段',
- 'rate_limited':'30 分钟间隔内，暂不打扰', 'no_new_events':'没有需要首次提醒的新事件',
- 'no_source':'尚未收到电脑采集', 'stale_source':'电脑采集数据过旧，请检查同步',
- 'auth_expired':'后台授权失效，请重新启用', 'not_primary':'当前不是主提醒手机',
- 'notification_submitted':'已提交系统通知', 'analysis_sync_failed':'分析缓存未更新，提醒独立检查',
- 'network_or_delivery_error':'网络或送达检查失败，请查看诊断',
- 'duplicate_or_inactive':'事件已提醒或已失效'
-}[value?.toString()] ?? value?.toString() ?? '尚未检查';
+String notificationCondition(Object? value) =>
+    const {
+      'permission_denied': '未允许应用通知',
+      'channel_missing': '通知渠道尚未创建',
+      'channel_blocked': '额度通知渠道已关闭',
+      'tray_only': '仅通知栏，横幅条件不足',
+      'heads_up_conditions': '具备横幅条件，仍受系统设置影响',
+      'system_dnd': '系统免打扰已开启，横幅或声音可能被抑制',
+      'duplicate': '已提醒，不重复发送',
+      'quiet_hours': '免打扰时段',
+      'rate_limited': '30 分钟间隔内，暂不打扰',
+      'no_new_events': '没有需要首次提醒的新事件',
+      'no_source': '尚未收到电脑采集',
+      'stale_source': '电脑采集数据过旧，请检查同步',
+      'stale_response': '提醒响应已过期，请重试并检查手机日期和时间是否自动同步',
+      'auth_expired': '后台授权失效，请重新启用',
+      'not_primary': '当前不是主提醒手机',
+      'notification_submitted': '已提交系统通知',
+      'foreground_presented': '已在应用内展示提醒',
+      'analysis_sync_failed': '分析缓存未更新，提醒独立检查',
+      'network_or_delivery_error': '网络或送达检查失败，请查看诊断',
+      'duplicate_or_inactive': '事件已提醒或已失效'
+    }[value?.toString()] ??
+    value?.toString() ??
+    '尚未检查';
 
 class BackgroundSettings extends StatefulWidget {
   final HubApi api;
@@ -66,6 +79,7 @@ class _BackgroundSettingsState extends State<BackgroundSettings>
       if (value) {
         await LocalNotifications.requestPermission();
         await BackgroundSync.enable(widget.api);
+        await BackgroundSync.check(widget.api);
       } else {
         await BackgroundSync.disable();
         await widget.api.call('DELETE', '/api/v1/mobile/background-token');
@@ -73,6 +87,28 @@ class _BackgroundSettingsState extends State<BackgroundSettings>
       await reload();
     } catch (e) {
       if (mounted) setState(() => error = '$e');
+    } finally {
+      if (mounted) setState(() => busy = false);
+    }
+  }
+
+  Future<void> checkNow({bool makePrimary = false}) async {
+    setState(() {
+      busy = true;
+      error = null;
+    });
+    try {
+      if (makePrimary) {
+        await BackgroundSync.primary(widget.api);
+      } else {
+        await BackgroundSync.check(widget.api);
+      }
+      await reload();
+      if (mounted && info['enabled'] != true) {
+        setState(() => error = '请先开启后台自动同步并提醒，再检查真实提醒链路。');
+      }
+    } catch (e) {
+      if (mounted) setState(() => error = '检查未完成：$e');
     } finally {
       if (mounted) setState(() => busy = false);
     }
@@ -94,7 +130,8 @@ class _BackgroundSettingsState extends State<BackgroundSettings>
                   SwitchListTile(
                       contentPadding: EdgeInsets.zero,
                       title: const Text('后台自动同步并提醒'),
-                      subtitle: const Text('系统约每 15 分钟安排检查；省电、休眠和强制停止可能延迟。'),
+                      subtitle: const Text(
+                          '应用打开时每 15 秒独立检查并显示应用内提醒；后台由系统约每 15 分钟安排，省电或休眠可能延迟。'),
                       value: info['enabled'] == true,
                       onChanged: busy ? null : toggle),
                   Text(
@@ -102,36 +139,35 @@ class _BackgroundSettingsState extends State<BackgroundSettings>
                   Text(
                       '主提醒手机：${info['primary'] == true ? '是' : '否或尚未检查'} · 后台任务：${info['scheduled'] == true ? '已注册' : '未启用'} · 电池：${info['battery_unrestricted'] == true ? '不受优化限制' : '可能受省电限制'}'),
                   const Text('同一事件只提醒一次；30 分钟内合并提醒。系统横幅仍受免打扰与手机设置影响。'),
-                  Text('通知状态：${notificationCondition(info['notification_state'])}'),
+                  Text(
+                      '通知状态：${notificationCondition(info['notification_state'])}'),
+                  if (info['enabled'] == true && info['primary'] != true)
+                    const Text('本机尚未确认是主提醒手机。请点击“设为主提醒手机”后检查。'),
+                  if (info['notifications'] != true)
+                    const Text('系统通知未授权：后台同步可以继续，但无法发出通知。请打开下方通知设置。'),
+                  if (info['battery_unrestricted'] != true)
+                    const Text(
+                        '如经常打开应用才收到提醒，请在系统中允许后台运行；小米／HyperOS 还需检查自启动、通知中的悬浮通知与锁屏通知。'),
                   if (info['source_observed_at'] != null)
                     Text('服务器最近收到的采集：${info['source_observed_at']}'),
                   if (info['last_run'] != null)
                     Text('后台最近执行：${info['last_run']}'),
                   if (info['last_notification'] != null)
-                    Text('最近提交系统通知：${info['last_notification']}（不代表用户已看到横幅）'),
+                    Text(
+                        '最近提醒展示／系统提交：${info['last_notification']}（系统提交不代表用户已看到横幅）'),
                   if (info['last_reason'] != null)
-                    Text('最近检查结果：${notificationCondition(info['last_reason'])}'),
+                    Text(
+                        '最近检查结果：${notificationCondition(info['last_reason'])}'),
                   if (info['last_sync'] != null)
                     Text('最近提醒检查：${info['last_sync']}'),
                   Wrap(spacing: 8, children: [
                     TextButton(
-                        onPressed: busy
-                            ? null
-                            : () async {
-                                try {
-                                  await BackgroundSync.primary(widget.api);
-                                  await reload();
-                                } catch (e) {
-                                  if (mounted) setState(() => error = '$e');
-                                }
-                              },
+                        onPressed:
+                            busy ? null : () => checkNow(makePrimary: true),
                         child: const Text('设为主提醒手机')),
                     TextButton(
-                        onPressed: () async {
-                          await BackgroundSync.check(widget.api);
-                          await reload();
-                        },
-                        child: const Text('检查真实提醒链路')),
+                        onPressed: busy ? null : checkNow,
+                        child: Text(busy ? '正在检查…' : '检查真实提醒链路')),
                     TextButton(
                         onPressed: () async {
                           await LocalNotifications.requestPermission();

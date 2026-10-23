@@ -21,6 +21,7 @@ import 'manual_account.dart';
 import 'strong_reminder_ui.dart';
 import 'reminder_policy.dart';
 import 'background_sync.dart';
+import 'foreground_reminder_poller.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -57,6 +58,7 @@ class _HubHomeState extends State<HubHome> with WidgetsBindingObserver {
   Map<String, String> modeStatus = {};
   final vault = const FlutterSecureStorage();
   Timer? timer;
+  late final ForegroundReminderPoller reminderPoller;
   bool reminderPopupOpen = false;
   String? error;
   bool busy = false;
@@ -76,11 +78,20 @@ class _HubHomeState extends State<HubHome> with WidgetsBindingObserver {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     LocalNotifications.onAction = handleReminderAction;
+    reminderPoller = ForegroundReminderPoller(
+      check: () async {
+        if (api?.session != null) await pollStrongNotifications();
+      },
+      onError: (e) {
+        if (mounted) setState(() => error = '提醒检查失败，将自动重试：$e');
+      },
+    );
+    reminderPoller.setActive(
+        WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed);
     unawaited(initialize());
     timer = Timer.periodic(const Duration(seconds: 30), (_) {
       if (engine != null && !busy) {
         unawaited(sync());
-        unawaited(pollStrongNotifications());
       }
     });
   }
@@ -88,6 +99,7 @@ class _HubHomeState extends State<HubHome> with WidgetsBindingObserver {
   @override
   void dispose() {
     timer?.cancel();
+    reminderPoller.dispose();
     WidgetsBinding.instance.removeObserver(this);
     email.dispose();
     password.dispose();
@@ -101,14 +113,9 @@ class _HubHomeState extends State<HubHome> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState value) {
+    reminderPoller.setActive(value == AppLifecycleState.resumed);
     if (value == AppLifecycleState.resumed && engine != null && !busy) {
-      if (api != null) {
-        unawaited(BackgroundSync.renew(api!).catchError((Object e) {
-          if (mounted) setState(() => error = '后台授权需检查：$e');
-        }));
-      }
       unawaited(sync());
-      unawaited(pollStrongNotifications());
     }
   }
 
@@ -168,11 +175,8 @@ class _HubHomeState extends State<HubHome> with WidgetsBindingObserver {
         savedMode == 'cursor' || savedMode == 'codex' ? savedMode! : 'choose';
     if (mounted) setState(() => error = null);
     if (engine != null) {
-      unawaited(BackgroundSync.renew(api!).catchError((Object e) {
-        if (mounted) setState(() => error = '后台授权检查失败，请在手机提醒设置重试：$e');
-      }));
       unawaited(sync());
-      unawaited(pollStrongNotifications());
+      unawaited(reminderPoller.checkNow());
       unawaited(refreshModeStatus());
     } else {
       unawaited(BackgroundSync.disable());
@@ -479,7 +483,10 @@ class _HubHomeState extends State<HubHome> with WidgetsBindingObserver {
     } finally {
       if (mounted) setState(() => busy = false);
     }
-    if (engine != null) unawaited(sync());
+    if (engine != null) {
+      unawaited(sync());
+      unawaited(reminderPoller.checkNow());
+    }
   }
 
   /// Submits an invite-code registration; the server keeps the account

@@ -7,5 +7,8 @@
     <uses-permission android:name="android.permission.INTERNET"/>
     <!-- Only debug builds may use adb reverse with 127.0.0.1. Release keeps HTTPS. -->
     <application android:usesCleartextTraffic="true"
-        tools:replace="android:usesCleartextTraffic"/>
+        tools:replace="android:usesCleartextTraffic">
+        <activity android:name=".ReminderProbeActivity" android:exported="false"
+            android:theme="@android:style/Theme.Material.Light.NoActionBar" />
+    </application>
 </manifest>

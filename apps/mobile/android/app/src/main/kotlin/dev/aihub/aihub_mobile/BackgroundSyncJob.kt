@@ -5,6 +5,8 @@ import android.app.job.*
 import android.content.*
 import android.os.Build
 import android.os.PowerManager
+import android.os.Handler
+import android.os.Looper
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
@@ -51,13 +53,13 @@ object BackgroundSync {
         val uri = URI(server)
         require(uri.scheme == "https" && uri.host != null && uri.rawUserInfo == null && uri.rawQuery == null && uri.rawFragment == null && (uri.path.isNullOrEmpty() || uri.path == "/"))
         require(token.length in 32..256 && scope.length in 1..1024)
-        if(prefs(c).getString("scope","")!=scope)c.getSystemService(NotificationManager::class.java).cancelAll()
-        check(prefs(c).edit().putString("server",server.trimEnd('/')).putString("scope",scope).putString("credential",encrypt(token)).putString("expires_at",expiry).putBoolean("enabled",true).remove("error").commit())
+        if(prefs(c).getString("scope","")!=scope){c.getSystemService(NotificationManager::class.java).cancelAll();ForegroundReminders.clear()}
+        check(prefs(c).edit().putString("server",server.trimEnd('/')).putString("scope",scope).putString("credential",encrypt(token)).putString("expires_at",expiry).putBoolean("enabled",true).remove("error").remove("auth_paused").commit())
         ensureScheduled(c)
         checkNow(c)
     }
     fun ensureScheduled(c:Context) {
-        if(!prefs(c).getBoolean("enabled",false))return
+        if(!prefs(c).getBoolean("enabled",false) || prefs(c).getBoolean("auth_paused",false))return
         val scheduler=c.getSystemService(JobScheduler::class.java)
         if(scheduler.getPendingJob(JOB)==null) {
             val job=JobInfo.Builder(JOB,ComponentName(c,BackgroundSyncJob::class.java)).setPeriodic(15*60*1000L).setPersisted(true).setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY).build()
@@ -66,8 +68,23 @@ object BackgroundSync {
     }
     private val checks=Executors.newSingleThreadExecutor()
     private val checking=AtomicBoolean(false)
-    fun checkNow(c:Context) { if(!checking.compareAndSet(false,true))return; val app=c.applicationContext;checks.submit{try{run(app)}catch(e:Exception){recordError(app,e)}finally{checking.set(false)}} }
-    fun disable(c: Context) { c.getSystemService(JobScheduler::class.java).cancel(JOB);c.getSystemService(NotificationManager::class.java).cancelAll();prefs(c).edit().putBoolean("enabled",false).remove("credential").commit() }
+    // Manual checks join an in-flight check and observe its completed result.
+    private val completionLock=Any()
+    private val completions=mutableListOf<() -> Unit>()
+    fun checkNow(c:Context, completed:(() -> Unit)?=null) {
+        synchronized(completionLock) {
+            if(completed!=null)completions.add(completed)
+            if(!checking.compareAndSet(false,true))return
+        }
+        val app=c.applicationContext
+        checks.submit {
+            try{run(app,!foreground)}catch(e:Exception){recordError(app,e)}finally{
+                val callbacks=synchronized(completionLock){checking.set(false);completions.toList().also{completions.clear()}}
+                Handler(Looper.getMainLooper()).post{callbacks.forEach{it()}}
+            }
+        }
+    }
+    fun disable(c: Context) { c.getSystemService(JobScheduler::class.java).cancel(JOB);c.getSystemService(NotificationManager::class.java).cancelAll();prefs(c).edit().putBoolean("enabled",false).remove("credential").commit();ForegroundReminders.clear() }
     fun bind(c: Context, scope: String) { if(prefs(c).getString("scope","") != scope) disable(c) else ensureScheduled(c) }
     private fun channel(c:Context):NotificationChannel? {
         val manager=c.getSystemService(NotificationManager::class.java)
@@ -78,16 +95,23 @@ object BackgroundSync {
     }
     fun status(c: Context): Map<String, Any?> {
         val manager=c.getSystemService(NotificationManager::class.java)
-        val channel=if(Build.VERSION.SDK_INT>=26)manager.getNotificationChannel(CHANNEL) else null
+        val channel=channel(c)
         val enabled=manager.areNotificationsEnabled()
-        val condition=if(!enabled)"permission_denied" else if(Build.VERSION.SDK_INT>=26&&channel==null)"channel_missing" else if(channel!=null&&channel.importance==NotificationManager.IMPORTANCE_NONE)"channel_blocked" else if(channel!=null&&channel.importance<NotificationManager.IMPORTANCE_HIGH)"tray_only" else "heads_up_conditions"
+        val dnd=when(manager.currentInterruptionFilter) {
+            NotificationManager.INTERRUPTION_FILTER_NONE,NotificationManager.INTERRUPTION_FILTER_ALARMS -> true
+            NotificationManager.INTERRUPTION_FILTER_PRIORITY -> channel?.canBypassDnd()!=true
+            else -> false
+        }
+        val condition=if(!enabled)"permission_denied" else if(Build.VERSION.SDK_INT>=26&&channel==null)"channel_missing" else if(channel!=null&&channel.importance==NotificationManager.IMPORTANCE_NONE)"channel_blocked" else if(channel!=null&&channel.importance<NotificationManager.IMPORTANCE_HIGH)"tray_only" else if(dnd)"system_dnd" else "heads_up_conditions"
         return mapOf("enabled" to prefs(c).getBoolean("enabled",false),"scope" to prefs(c).getString("scope",""),"expires_at" to prefs(c).getString("expires_at",null),"last_sync" to prefs(c).getString("last_sync",null),"last_run" to prefs(c).getString("last_run",null),"source_observed_at" to prefs(c).getString("source_observed_at",null),"last_notification" to prefs(c).getString("last_notification",null),"error" to prefs(c).getString("error",null),"analysis_error" to prefs(c).getString("analysis_error",null),"last_reason" to prefs(c).getString("last_reason",null),"primary" to prefs(c).getBoolean("primary",false),"notifications" to enabled,"notification_state" to condition,"heads_up" to (condition=="heads_up_conditions"),"battery_unrestricted" to c.getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(c.packageName),"scheduled" to (c.getSystemService(JobScheduler::class.java).getPendingJob(JOB)!=null),"diagnostics" to prefs(c).getString("diagnostics","[]"))
     }
     private fun diagnostic(c:Context,reason:String,event:String="") {
         val now=System.currentTimeMillis();val history=JSONArray(prefs(c).getString("diagnostics","[]"));val next=JSONArray()
         for(i in 0 until history.length()){val row=history.getJSONObject(i);if(now-row.optLong("at")<7*86400000L && i>=history.length()-199)next.put(row)}
         next.put(JSONObject().put("at",now).put("reason",reason).put("event",event))
-        prefs(c).edit().putString("diagnostics",next.toString()).putString("last_reason",reason).commit()
+        val editor=prefs(c).edit().putString("diagnostics",next.toString())
+        if(reason!="analysis_sync_failed")editor.putString("last_reason",reason)
+        editor.commit()
     }
     private fun receiptKey(scope:String,id:String)="seen:"+scope+":"+id
     fun seen(c:Context,scope:String,id:String,token:String)=prefs(c).getString(receiptKey(scope,id),null)==token
@@ -114,21 +138,35 @@ object BackgroundSync {
     // The Android desugared Instant parser rejects RFC3339 offsets such as +08:00.
     // Server timestamps can include both an offset and nanoseconds.
     private fun time(value:String):Long=try{OffsetDateTime.parse(value).toInstant().toEpochMilli()}catch(_:Exception){0}
-    @Synchronized fun run(c:Context) {
-        val prefs=prefs(c);if(!prefs.getBoolean("enabled",false))return
+    @JvmOverloads @Synchronized fun run(c:Context,refreshCaches:Boolean=true) {
+        val prefs=prefs(c);if(!prefs.getBoolean("enabled",false) || prefs.getBoolean("auth_paused",false))return
         val server=prefs.getString("server","")!!;val scope=prefs.getString("scope","")!!;val credential=token(c)
         prefs.edit().putString("last_run",Instant.now().toString()).commit()
+        prefs.getString("release:"+scope,null)?.let { batch ->
+            api(server,credential,"/reminders",JSONObject().put("action","release").put("batch_id",batch))
+            check(prefs.edit().remove("release:"+scope).commit())
+        }
         val feed=api(server,credential,"/reminders")
         prefs.edit().putString("last_sync",Instant.now().toString()).putBoolean("primary",feed.optBoolean("primary")).putString("source_observed_at",feed.optString("source_observed_at")).remove("error").commit()
         try { deliver(c,server,scope,credential,feed) } finally {
             // Analytics and overview caches never block event delivery.
             var cacheFailed=false
-            for(kind in listOf("overview","local-data")) {
+            // Flutter already refreshes foreground data. Slow cache downloads must
+            // not occupy the reminder worker between its 15-second checks.
+            for(kind in if(refreshCaches)listOf("overview","local-data") else emptyList()) {
                 try {save(c,scope,kind,api(server,credential,"/"+kind))}
                 catch(e:Exception){if(e is InterruptedException)throw e;cacheFailed=true;prefs.edit().putString("analysis_error","数据缓存未更新，提醒独立检查").commit();diagnostic(c,"analysis_sync_failed",kind)}
             }
-            if(!cacheFailed)prefs.edit().remove("analysis_error").commit()
+            if(refreshCaches && !cacheFailed)prefs.edit().remove("analysis_error").commit()
         }
+    }
+    private fun releaseUnsent(c:Context,server:String,scope:String,credential:String,batch:String,events:JSONArray) {
+        // Persist the release before networking, so a transient failure can be retried.
+        val edit=prefs(c).edit().putString("release:"+scope,batch)
+        for(i in 0 until events.length())edit.remove("presented:"+scope+":"+events.getJSONObject(i).getString("id"))
+        check(edit.commit())
+        api(server,credential,"/reminders",JSONObject().put("action","release").put("batch_id",batch))
+        check(prefs(c).edit().remove("release:"+scope).commit())
     }
     private fun deliver(c:Context,server:String,scope:String,credential:String,feed:JSONObject) {
         if(!feed.optBoolean("primary")){diagnostic(c,"not_primary");return}
@@ -156,11 +194,8 @@ object BackgroundSync {
         val batch=reserved.getString("batch_id");val events=reserved.getJSONArray("events")
         // User/account changes before submitting are definitely unsent and may release.
         if(Thread.currentThread().isInterrupted || !prefs(c).getBoolean("enabled",false) || prefs(c).getString("scope","")!=scope) {
-            api(server,credential,"/reminders",JSONObject().put("action","release").put("batch_id",batch));return
+            releaseUnsent(c,server,scope,credential,batch,events);return
         }
-        val editor=prefs(c).edit()
-        for(i in 0 until events.length()){editor.putString("presented:"+scope+":"+events.getJSONObject(i).getString("id"),"reserved")}
-        check(editor.commit())
         val first=events.getJSONObject(0)
         val title=if(events.length()==1)first.getString("title") else "AI Hub · "+events.length()+" 条新提醒"
         val body=(0 until events.length()).map{events.getJSONObject(it)}.take(8).joinToString("\n"){it.getString("title")+"："+it.getString("body")}
@@ -168,14 +203,33 @@ object BackgroundSync {
         val pending=PendingIntent.getActivity(c,batch.hashCode(),open,PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         val builder=if(Build.VERSION.SDK_INT>=26)Notification.Builder(c,CHANNEL) else Notification.Builder(c)
         val notification=builder.setSmallIcon(c.applicationInfo.icon).setContentTitle(title).setContentText(body).setStyle(Notification.BigTextStyle().bigText(body)).setContentIntent(pending).setAutoCancel(true).setOnlyAlertOnce(true).setCategory(Notification.CATEGORY_REMINDER).setVisibility(Notification.VISIBILITY_PRIVATE).setPriority(Notification.PRIORITY_HIGH).setDefaults(Notification.DEFAULT_ALL).build()
-        manager.notify(batch.hashCode() and 0x7fffffff,notification)
+        // Recheck after the network reservation: users can revoke permission meanwhile.
+        val blocked=if(!manager.areNotificationsEnabled())"permission_denied" else if(channel(c)?.importance==NotificationManager.IMPORTANCE_NONE)"channel_blocked" else null
+        if(blocked!=null){diagnostic(c,blocked);releaseUnsent(c,server,scope,credential,batch,events);return}
+        val editor=prefs(c).edit()
+        for(i in 0 until events.length()){editor.putString("presented:"+scope+":"+events.getJSONObject(i).getString("id"),"reserved")}
+        if(!editor.commit()){releaseUnsent(c,server,scope,credential,batch,events);error("提醒记录保存失败，尚未提交通知")}
+        val inApp=ForegroundReminders.show(title,body) {
+            prefs(c).getBoolean("enabled",false) && prefs(c).getString("scope","")==scope &&
+                manager.areNotificationsEnabled() && channel(c)?.importance!=NotificationManager.IMPORTANCE_NONE
+        }
+        // A foreground dialog and a system notification are alternative surfaces.
+        if(!inApp && (!prefs(c).getBoolean("enabled",false) || prefs(c).getString("scope","")!=scope)) {
+            releaseUnsent(c,server,scope,credential,batch,events);return
+        }
+        if(!inApp && (!manager.areNotificationsEnabled() || channel(c)?.importance==NotificationManager.IMPORTANCE_NONE)) {
+            diagnostic(c,if(!manager.areNotificationsEnabled())"permission_denied" else "channel_blocked")
+            releaseUnsent(c,server,scope,credential,batch,events);return
+        }
+        try {if(!inApp)manager.notify(batch.hashCode() and 0x7fffffff,notification)}
+        catch(e:SecurityException){diagnostic(c,"permission_denied");releaseUnsent(c,server,scope,credential,batch,events);return}
         prefs(c).edit().putString("last_notification",Instant.now().toString()).commit()
-        diagnostic(c,"notification_submitted",batch)
+        diagnostic(c,if(inApp)"foreground_presented" else "notification_submitted",batch)
         // Server reservation survives a lost receipt; it cannot cause another popup.
         api(server,credential,"/reminders",JSONObject().put("action","submitted").put("batch_id",batch))
     }
     fun recordError(c:Context,e:Exception){
-        if(e is BackgroundAuthException) {prefs(c).edit().putString("error","后台授权失效，请打开应用重新启用").commit();diagnostic(c,"auth_expired");c.getSystemService(JobScheduler::class.java).cancel(JOB)}
+        if(e is BackgroundAuthException) {prefs(c).edit().putBoolean("auth_paused",true).putString("error","后台授权失效，请打开应用重新启用").commit();diagnostic(c,"auth_expired");c.getSystemService(JobScheduler::class.java).cancel(JOB)}
         else {prefs(c).edit().putString("error",e.message?:"后台检查失败，将重试").commit();diagnostic(c,"network_or_delivery_error")}
     }
 

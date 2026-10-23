@@ -3,8 +3,8 @@ import 'dart:io';
 
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
-/// Heads-up popup for strong reminders. A new channel id is required because
-/// Android keeps the importance of an existing channel. iOS mirrors the same
+/// Heads-up popup for strong reminders. Preserve the existing channel and the
+/// user's notification settings. iOS mirrors the same
 /// three actions through a Darwin notification category so action ids stay
 /// identical across platforms (read, snooze, dismiss).
 class LocalNotifications {
@@ -52,7 +52,7 @@ class LocalNotifications {
       await impl?.createNotificationChannel(const AndroidNotificationChannel(
         channelId,
         '弹窗提醒',
-        description: '额度与重置提醒会在屏幕上弹出',
+        description: '额度与到期提醒，横幅展示受系统设置影响',
         importance: Importance.max,
         playSound: true,
         enableVibration: true,
@@ -98,6 +98,13 @@ class LocalNotifications {
         final android = _plugin.resolvePlatformSpecificImplementation<
             AndroidFlutterLocalNotificationsPlugin>();
         if (await android?.areNotificationsEnabled() != true) return false;
+        final channels = await android?.getNotificationChannels();
+        if (channels?.any((channel) =>
+                channel.id == channelId &&
+                channel.importance == Importance.none) ==
+            true) {
+          return false;
+        }
       }
       if (Platform.isIOS) {
         final ios = _plugin.resolvePlatformSpecificImplementation<
@@ -112,7 +119,7 @@ class LocalNotifications {
         android: AndroidNotificationDetails(
           channelId,
           '弹窗提醒',
-          channelDescription: '额度与重置提醒会在屏幕上弹出',
+          channelDescription: '额度与到期提醒，横幅展示受系统设置影响',
           importance: Importance.max,
           priority: Priority.max,
           category: AndroidNotificationCategory.reminder,

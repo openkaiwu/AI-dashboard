@@ -10,15 +10,15 @@ import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : FlutterActivity() {
-    override fun onResume() { super.onResume(); BackgroundSync.foreground=true; BackgroundSync.ensureScheduled(this); BackgroundSync.checkNow(this) }
-    override fun onPause() { BackgroundSync.foreground=false; super.onPause() }
+    override fun onResume() { super.onResume(); BackgroundSync.foreground=true; ForegroundReminders.resume(this); BackgroundSync.ensureScheduled(this); BackgroundSync.checkNow(this) }
+    override fun onPause() { ForegroundReminders.pause(this); BackgroundSync.foreground=false; super.onPause() }
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger,"dev.aihub/background")
             .setMethodCallHandler { call,result ->
                 try {
                     when(call.method) {
-                        "check" -> {BackgroundSync.checkNow(this);result.success(true)}
+                        "check" -> BackgroundSync.checkNow(this){result.success(BackgroundSync.status(this))}
                         "status" -> result.success(BackgroundSync.status(this))
                         "configure" -> {BackgroundSync.configure(this,call.argument<String>("server")!!,call.argument<String>("scope")!!,call.argument<String>("token")!!,call.argument<String>("expires_at")!!);result.success(BackgroundSync.status(this))}
                         "disable" -> {BackgroundSync.disable(this);result.success(true)}
