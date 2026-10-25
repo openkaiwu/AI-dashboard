@@ -7,6 +7,7 @@ import 'theme.dart';
 import 'reminder_policy.dart';
 import 'consumption_panel.dart';
 import 'background_settings.dart';
+import 'display_time.dart';
 
 const Map<String, String> planLabel = {
   'plus': 'Plus',
@@ -31,9 +32,13 @@ class CodexPage extends StatefulWidget {
 }
 
 class _CodexPageState extends State<CodexPage>
-    with SingleTickerProviderStateMixin {
+    with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   Json? overview;
   String? error;
+  String? cacheWarning;
+  bool dataUnavailable = true;
+  int generation = 0;
+  Future<void>? refreshing;
   bool busy = false;
   Timer? timer;
   late TabController tabs;
@@ -50,52 +55,119 @@ class _CodexPageState extends State<CodexPage>
     tabs.addListener(() {
       if (mounted) setState(() {});
     });
+    WidgetsBinding.instance.addObserver(this);
     unawaited(load());
+    scheduleRefresh();
+  }
+
+  void scheduleRefresh() {
+    timer?.cancel();
     timer =
         Timer.periodic(const Duration(minutes: 1), (_) => unawaited(refresh()));
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    timer?.cancel();
+    if (state == AppLifecycleState.resumed) {
+      scheduleRefresh();
+      unawaited(refresh());
+    }
+  }
+
+  @override
+  void didUpdateWidget(CodexPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.scope != widget.scope || oldWidget.api != widget.api) {
+      generation++;
+      refreshing = null;
+      overview = null;
+      error = null;
+      cacheWarning = null;
+      dataUnavailable = true;
+      busy = false;
+      selectedDevice = '';
+      unawaited(load());
+    }
+  }
+
+  @override
   void dispose() {
+    generation++;
+    WidgetsBinding.instance.removeObserver(this);
     timer?.cancel();
     tabs.dispose();
     super.dispose();
   }
 
   Future<void> load() async {
+    final ticket = generation;
     try {
       final cached = await widget.store.readCodex('${widget.scope}:advisor');
-      if (mounted && cached.isNotEmpty) {
+      if (mounted &&
+          ticket == generation &&
+          overview == null &&
+          cached.isNotEmpty) {
         setState(() => overview = cached.first as Json);
       }
     } catch (_) {}
-    await refresh();
+    if (mounted && ticket == generation) await refresh();
   }
 
-  Future<void> refresh() async {
-    if (busy || !mounted) return;
+  Future<void> refresh({bool afterPending = false}) async {
+    final pending = refreshing;
+    if (pending != null) {
+      await pending;
+      if (!afterPending) return;
+    }
+    if (!mounted) return;
+    // Re-check after waiting: several callers may have requested the same refresh.
+    if (refreshing != null && refreshing != pending) {
+      await refreshing;
+      return;
+    }
+    final task = fetchOverview();
+    refreshing = task;
+    try {
+      await task;
+    } finally {
+      if (identical(refreshing, task)) refreshing = null;
+    }
+  }
+
+  Future<void> fetchOverview() async {
+    final ticket = generation;
+    final api = widget.api, store = widget.store, scope = widget.scope;
     setState(() => busy = true);
     try {
-      final data = await widget.api.call('GET', '/api/v1/codex/overview');
-      await widget.store.saveCodex('${widget.scope}:advisor', [data]);
-      if (mounted) {
-        setState(() {
-          overview = data;
-          error = data['_offline'] == true
-              ? '离线显示本机保存的记录；重新同步后更新。'
-              : data['_cache_error'] as String?;
-          if (selectedDevice.isEmpty &&
-              (data['devices'] as List?)?.isNotEmpty == true) {
-            selectedDevice = data['devices'][0]['id'] as String;
-          }
-        });
+      final data = await api.call('GET', '/api/v1/codex/overview');
+      if (!mounted || ticket != generation) return;
+      setState(() {
+        overview = data;
+        dataUnavailable = data['_offline'] == true;
+        error = dataUnavailable ? '离线显示本机保存的记录；重新同步后更新。' : null;
+        cacheWarning = data['_cache_error'] as String?;
+        final devices = (data['devices'] as List?) ?? [];
+        if (!devices.any((d) => d['id'] == selectedDevice)) {
+          selectedDevice = devices.isEmpty ? '' : devices.first['id'] as String;
+        }
+      });
+      try {
+        await store.saveCodex('$scope:advisor', [data]);
+      } catch (_) {
+        if (mounted && ticket == generation) {
+          setState(() => cacheWarning = '最新数据已显示，但本机缓存保存失败，请检查可用空间。');
+        }
       }
     } catch (_) {
-      if (mounted) {
-        setState(() => error = '服务暂不可用，显示上次缓存。');
+      if (mounted && ticket == generation) {
+        setState(() {
+          error = '服务暂不可用，显示上次缓存。';
+          dataUnavailable = true;
+        });
       }
     } finally {
-      if (mounted) setState(() => busy = false);
+      if (mounted && ticket == generation) setState(() => busy = false);
     }
   }
 
@@ -116,7 +188,7 @@ class _CodexPageState extends State<CodexPage>
           .toList();
 
   bool stale(Json? d) {
-    if (error != null || d == null) return true;
+    if (dataUnavailable || d == null) return true;
     final snap = d['snapshot'] as Json?;
     if (snap == null || snap['status'] != 'ok') return true;
     final observed = DateTime.tryParse(snap['observed_at'] as String? ?? '');
@@ -134,7 +206,7 @@ class _CodexPageState extends State<CodexPage>
           'POST',
           '/api/v1/codex/alerts/${Uri.encodeComponent(id)}',
           {'action': action});
-      await refresh();
+      await refresh(afterPending: true);
     } catch (_) {
       if (mounted) setState(() => error = '暂时无法更新提醒');
     } finally {
@@ -146,15 +218,13 @@ class _CodexPageState extends State<CodexPage>
     try {
       await widget.api.call('PATCH', '/api/v1/codex/preferences',
           {...overview!['preferences'] as Json, 'enabled': enabled});
-      await refresh();
+      await refresh(afterPending: true);
     } catch (_) {
       if (mounted) setState(() => error = '规则保存失败');
     }
   }
 
-  String when(dynamic value) => value == null
-      ? '未知'
-      : DateTime.parse(value as String).toLocal().toString().split('.').first;
+  String when(dynamic value) => formatLocalTimestamp(value, empty: '未知');
 
   String hours(num? value) {
     if (value == null) return '时间未知';
@@ -209,7 +279,7 @@ class _CodexPageState extends State<CodexPage>
             : const Color(0xffdce6ff);
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.all(22),
+      padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
         color: color,
         borderRadius: BorderRadius.circular(16),
@@ -453,7 +523,7 @@ class _CodexPageState extends State<CodexPage>
     try {
       await widget.api
           .call('PATCH', '/api/v1/codex/preferences', {...prefs, key: value});
-      await refresh();
+      await refresh(afterPending: true);
     } catch (_) {
       if (mounted) setState(() => error = '规则保存失败');
     }
@@ -688,7 +758,7 @@ class _CodexPageState extends State<CodexPage>
           try {
             await widget.api
                 .call('PUT', '/api/v1/codex/plan', {'plan_type': value});
-            await refresh();
+            await refresh(afterPending: true);
           } catch (_) {
             if (mounted) setState(() => error = '套餐设置失败');
           }
@@ -737,10 +807,19 @@ class _CodexPageState extends State<CodexPage>
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       eyebrow('CODEX WORKSPACE'),
       Text(const ['额度总览', '使用计划', '提醒中心', '重置雷达', '消耗分析', '提醒设置'][tabs.index],
-          style: Theme.of(context).textTheme.headlineMedium),
-      const SizedBox(height: 6),
-      Text(tabs.index == 4 ? '查看消耗趋势，了解你的使用节奏。' : '掌握剩余额度，从容安排下一步。'),
-      const SizedBox(height: 16),
+          style: Theme.of(context).textTheme.headlineSmall),
+      const SizedBox(height: 4),
+      Text(
+          const [
+            '掌握剩余额度，从容安排下一步。',
+            '按重置周期规划，给后续任务留出空间。',
+            '查看触发原因，集中处理额度提醒。',
+            '核对消息来源与最近检查结果。',
+            '查看消耗趋势，了解你的使用节奏。',
+            '管理提醒规则与这台手机的通知。'
+          ][tabs.index],
+          style: const TextStyle(color: HubTheme.muted, fontSize: 12)),
+      const SizedBox(height: 8),
       Row(children: [
         Container(
           width: 8,
@@ -753,7 +832,11 @@ class _CodexPageState extends State<CodexPage>
         const SizedBox(width: 8),
         Expanded(
           child: Text(
-            isStale ? '等待电脑新数据' : '${d?['name'] ?? '电脑'} · 已同步',
+            overview == null && busy
+                ? '正在获取额度…'
+                : isStale
+                    ? '等待电脑新数据'
+                    : '${d?['name'] ?? '电脑'} · 已同步',
             style: Theme.of(context).textTheme.labelSmall,
           ),
         ),
@@ -762,9 +845,7 @@ class _CodexPageState extends State<CodexPage>
               constraints: const BoxConstraints(maxWidth: 120),
               child: DropdownButton<String>(
                 isExpanded: true,
-                value: selectedDevice.isEmpty
-                    ? devices.first['id']
-                    : selectedDevice,
+                value: d?['id'] as String?,
                 items: [
                   for (final item in devices)
                     DropdownMenuItem(
@@ -780,10 +861,14 @@ class _CodexPageState extends State<CodexPage>
               icon: const Icon(Icons.refresh_rounded, size: 17),
               label: Text(busy ? '同步中…' : '刷新')),
       ]),
-      if (error != null)
+      Text(
+          '数据截至 ${formatLocalTimestamp(d?['snapshot']?['observed_at'], empty: '采集时间未知')}',
+          style: const TextStyle(color: HubTheme.muted, fontSize: 11)),
+      if (error != null || cacheWarning != null)
         Padding(
           padding: const EdgeInsets.only(top: 8),
-          child: Text(error!, style: const TextStyle(color: HubTheme.warn)),
+          child: Text(error ?? cacheWarning!,
+              style: const TextStyle(color: HubTheme.warn, fontSize: 12)),
         ),
       if (overview?['plan']?['plan_type'] == 'unknown')
         const Text('Codex 套餐尚未确认，请在提醒设置中选择套餐。'),

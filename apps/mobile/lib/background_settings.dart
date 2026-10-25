@@ -4,6 +4,9 @@ import 'api.dart';
 import 'store.dart';
 import 'background_sync.dart';
 import 'local_notifications.dart';
+import 'display_time.dart';
+import 'theme.dart';
+import 'notification_readiness.dart';
 
 String notificationCondition(Object? value) =>
     const {
@@ -70,140 +73,201 @@ class _BackgroundSettingsState extends State<BackgroundSettings>
     }
   }
 
-  Future<void> toggle(bool value) async {
+  Future<void> runAction(Future<void> Function() action) async {
+    if (busy) return;
     setState(() {
       busy = true;
       error = null;
     });
     try {
-      if (value) {
-        await LocalNotifications.requestPermission();
-        await BackgroundSync.enable(widget.api);
-        await BackgroundSync.check(widget.api);
-      } else {
-        await BackgroundSync.disable();
-        await widget.api.call('DELETE', '/api/v1/mobile/background-token');
-      }
-      await reload();
+      await action();
     } catch (e) {
-      if (mounted) setState(() => error = '$e');
+      if (mounted) setState(() => error = '操作未完成：$e');
     } finally {
+      await reload();
       if (mounted) setState(() => busy = false);
     }
   }
 
-  Future<void> checkNow({bool makePrimary = false}) async {
-    setState(() {
-      busy = true;
-      error = null;
-    });
-    try {
-      if (makePrimary) {
-        await BackgroundSync.primary(widget.api);
-      } else {
-        await BackgroundSync.check(widget.api);
-      }
-      await reload();
-      if (mounted && info['enabled'] != true) {
-        setState(() => error = '请先开启后台自动同步并提醒，再检查真实提醒链路。');
-      }
-    } catch (e) {
-      if (mounted) setState(() => error = '检查未完成：$e');
-    } finally {
-      if (mounted) setState(() => busy = false);
-    }
-  }
+  Future<void> toggle(bool value) => runAction(() async {
+        if (value) {
+          await LocalNotifications.requestPermission();
+          await BackgroundSync.enable(widget.api);
+          await BackgroundSync.check(widget.api);
+        } else {
+          await BackgroundSync.disable();
+          await widget.api.call('DELETE', '/api/v1/mobile/background-token');
+        }
+      });
+
+  Future<void> checkNow({bool makePrimary = false}) => runAction(() async {
+        if (makePrimary) {
+          await BackgroundSync.primary(widget.api);
+        } else {
+          await BackgroundSync.check(widget.api);
+        }
+      });
+
+  Widget condition(String label, bool ready) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        decoration: BoxDecoration(
+            color: ready ? HubTheme.accentDim : HubTheme.bg2,
+            borderRadius: BorderRadius.circular(8)),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Icon(ready ? Icons.check_circle_outline : Icons.info_outline,
+              size: 15, color: ready ? HubTheme.accent : HubTheme.warn),
+          const SizedBox(width: 6),
+          Text(label, style: const TextStyle(fontSize: 12)),
+        ]),
+      );
+
+  Widget record(String label, Object? value) => Padding(
+        padding: const EdgeInsets.only(bottom: 8),
+        child: Text('$label：${formatLocalTimestamp(value)}',
+            style: const TextStyle(fontSize: 12, color: HubTheme.muted)),
+      );
 
   @override
   Widget build(BuildContext context) {
     if (!Platform.isAndroid) return const SizedBox.shrink();
+    final enabled = info['enabled'] == true;
+    final readiness = notificationReadiness(info);
     return Card(
         child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Text('本地保存与后台通知',
-                      style: Theme.of(context).textTheme.titleMedium),
-                  const Text(
-                      '消耗记录自动保存在手机本地。电脑需开启自动同步或点击立即同步，手机才能获取新数据。覆盖安装会保留记录；卸载时请选择保留应用数据。'),
-                  SwitchListTile(
-                      contentPadding: EdgeInsets.zero,
-                      title: const Text('后台自动同步并提醒'),
-                      subtitle: const Text(
-                          '应用打开时每 15 秒独立检查并显示应用内提醒；后台由系统约每 15 分钟安排，省电或休眠可能延迟。'),
-                      value: info['enabled'] == true,
-                      onChanged: busy ? null : toggle),
-                  Text(
-                      '通知权限：${info['notifications'] == true ? '已开启' : '未开启'} · 横幅渠道：${info['heads_up'] == true ? '具备横幅条件' : '请检查渠道'}'),
-                  Text(
-                      '主提醒手机：${info['primary'] == true ? '是' : '否或尚未检查'} · 后台任务：${info['scheduled'] == true ? '已注册' : '未启用'} · 电池：${info['battery_unrestricted'] == true ? '不受优化限制' : '可能受省电限制'}'),
-                  const Text('同一事件只提醒一次；30 分钟内合并提醒。系统横幅仍受免打扰与手机设置影响。'),
-                  Text(
-                      '通知状态：${notificationCondition(info['notification_state'])}'),
-                  if (info['enabled'] == true && info['primary'] != true)
-                    const Text('本机尚未确认是主提醒手机。请点击“设为主提醒手机”后检查。'),
-                  if (info['notifications'] != true)
-                    const Text('系统通知未授权：后台同步可以继续，但无法发出通知。请打开下方通知设置。'),
-                  if (info['battery_unrestricted'] != true)
-                    const Text(
-                        '如经常打开应用才收到提醒，请在系统中允许后台运行；小米／HyperOS 还需检查自启动、通知中的悬浮通知与锁屏通知。'),
-                  if (info['source_observed_at'] != null)
-                    Text('服务器最近收到的采集：${info['source_observed_at']}'),
-                  if (info['last_run'] != null)
-                    Text('后台最近执行：${info['last_run']}'),
-                  if (info['last_notification'] != null)
-                    Text(
-                        '最近提醒展示／系统提交：${info['last_notification']}（系统提交不代表用户已看到横幅）'),
-                  if (info['last_reason'] != null)
-                    Text(
-                        '最近检查结果：${notificationCondition(info['last_reason'])}'),
-                  if (info['last_sync'] != null)
-                    Text('最近提醒检查：${info['last_sync']}'),
-                  Wrap(spacing: 8, children: [
-                    TextButton(
-                        onPressed:
-                            busy ? null : () => checkNow(makePrimary: true),
-                        child: const Text('设为主提醒手机')),
-                    TextButton(
-                        onPressed: busy ? null : checkNow,
-                        child: Text(busy ? '正在检查…' : '检查真实提醒链路')),
-                    TextButton(
-                        onPressed: () async {
-                          await LocalNotifications.requestPermission();
-                          await BackgroundSync.channel
-                              .invokeMethod('notificationSettings');
-                        },
-                        child: const Text('通知与横幅设置')),
-                    TextButton(
-                        onPressed: () => BackgroundSync.channel
-                            .invokeMethod('batterySettings'),
-                        child: const Text('后台运行与电池设置')),
-                    TextButton(
-                        onPressed: () async {
-                          final ok = await LocalNotifications.showReminder(
-                              id: 'test',
-                              title: 'AI Hub 通知测试',
-                              body: '这是测试通知，不改变额度或真实提醒。');
-                          if (mounted) {
-                            setState(() => error = ok
-                                ? '已提交系统通知，请确认是否看到横幅；接口成功不代表横幅显示。'
-                                : '通知未发出，请检查权限和通知渠道。');
-                          }
-                        },
-                        child: const Text('测试本机系统通知')),
+      padding: const EdgeInsets.all(16),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        Row(children: [
+          const Icon(Icons.notifications_active_outlined,
+              color: HubTheme.accent, size: 21),
+          const SizedBox(width: 10),
+          Expanded(
+              child: Text('这台手机的提醒',
+                  style: Theme.of(context).textTheme.titleMedium)),
+          if (busy)
+            const SizedBox(
+                width: 18,
+                height: 18,
+                child: CircularProgressIndicator(strokeWidth: 2)),
+        ]),
+        SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            title: const Text('自动同步并提醒'),
+            subtitle: const Text('应用内每 15 秒检查；后台检查由系统安排。',
+                style: TextStyle(fontSize: 12)),
+            value: enabled,
+            onChanged: busy || info.isEmpty ? null : toggle),
+        if (info.isEmpty)
+          const Text('正在读取此设备的提醒状态…')
+        else
+          Wrap(spacing: 8, runSpacing: 8, children: [
+            condition(readiness.label, readiness.ready),
+            condition(info['primary'] == true ? '主提醒手机' : '未确认为主手机',
+                info['primary'] == true),
+            condition(info['scheduled'] == true ? '后台已启用' : '后台未启用',
+                info['scheduled'] == true),
+          ]),
+        const SizedBox(height: 14),
+        Text(
+            enabled
+                ? notificationCondition(
+                    info['last_reason'] ?? info['notification_state'])
+                : '开启后，接收这台手机的额度与到期提醒。',
+            style: const TextStyle(fontWeight: FontWeight.w600)),
+        const SizedBox(height: 6),
+        if (enabled) record('最近检查', info['last_sync']),
+        if (enabled && info['primary'] != true)
+          const Text('将本机设为主提醒手机后，才能接收真实事件提醒。',
+              style: TextStyle(fontSize: 12, color: HubTheme.warn)),
+        if (readiness.hint != null && info.isNotEmpty)
+          Text(readiness.hint!,
+              style: const TextStyle(fontSize: 12, color: HubTheme.warn)),
+        const SizedBox(height: 10),
+        Wrap(spacing: 8, runSpacing: 4, children: [
+          FilledButton.icon(
+              onPressed: busy || !enabled ? null : checkNow,
+              icon: const Icon(Icons.refresh_rounded, size: 17),
+              label: Text(busy ? '处理中…' : '立即检查提醒')),
+          if (enabled && info['primary'] != true)
+            OutlinedButton(
+                onPressed: busy ? null : () => checkNow(makePrimary: true),
+                child: const Text('设为主提醒手机')),
+          TextButton(
+              onPressed: busy
+                  ? null
+                  : () => runAction(() async {
+                        await LocalNotifications.requestPermission();
+                        await BackgroundSync.channel
+                            .invokeMethod('notificationSettings');
+                      }),
+              child: const Text('通知与横幅设置')),
+        ]),
+        const SizedBox(height: 6),
+        const Text('同一事件只提醒一次，30 分钟内合并提醒。应用打开时优先显示应用内提示。',
+            style: TextStyle(fontSize: 12, color: HubTheme.muted)),
+        if (error != null || info['error'] != null)
+          Padding(
+              padding: const EdgeInsets.only(top: 10),
+              child: Text(error ?? info['error'].toString(),
+                  style: const TextStyle(color: HubTheme.warn, fontSize: 12))),
+        ExpansionTile(
+          tilePadding: EdgeInsets.zero,
+          title: const Text('后台运行与排查', style: TextStyle(fontSize: 13)),
+          children: [
+            Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+              Text('系统通知：${notificationCondition(info['notification_state'])}',
+                  style: const TextStyle(fontSize: 12)),
+              const SizedBox(height: 8),
+              Text(
+                  info['battery_unrestricted'] == true
+                      ? '电池：已允许不受优化限制。'
+                      : '省电或休眠可能延迟后台检查。请允许后台运行；小米／HyperOS 还需检查自启动、悬浮通知与锁屏通知。',
+                  style: const TextStyle(fontSize: 12, color: HubTheme.muted)),
+              const SizedBox(height: 10),
+              record('数据截至', info['source_observed_at']),
+              record('后台最近执行', info['last_run']),
+              record('最近提醒展示／系统提交', info['last_notification']),
+              const Text('后台由系统约每 15 分钟安排。系统提交成功不代表已看到横幅，仍受免打扰与手机设置影响。',
+                  style: TextStyle(fontSize: 12, color: HubTheme.muted)),
+              Wrap(spacing: 8, children: [
+                TextButton(
+                    onPressed: busy
+                        ? null
+                        : () => runAction(() async {
+                              await BackgroundSync.channel
+                                  .invokeMethod('batterySettings');
+                            }),
+                    child: const Text('后台与电池设置')),
+                TextButton(
+                    onPressed: busy
+                        ? null
+                        : () => runAction(() async {
+                              final ok = await LocalNotifications.showReminder(
+                                  id: 'test',
+                                  title: 'AI Hub 通知测试',
+                                  body: '这是测试通知，不改变额度或真实提醒。');
+                              if (mounted) {
+                                setState(() => error = ok
+                                    ? '已提交系统通知，请确认手机上是否出现横幅。'
+                                    : '通知未发出，请检查权限与通知渠道。');
+                              }
+                            }),
+                    child: const Text('测试系统通知')),
+              ]),
+              if (info['analysis_error'] != null)
+                Text(info['analysis_error'].toString()),
+              ExpansionTile(
+                  tilePadding: EdgeInsets.zero,
+                  title: const Text('最近诊断记录 · 保留 7 天',
+                      style: TextStyle(fontSize: 12)),
+                  children: [
+                    SelectableText(info['diagnostics']?.toString() ?? '暂无记录')
                   ]),
-                  if (info['analysis_error'] != null)
-                    Text(info['analysis_error'].toString()),
-                  ExpansionTile(
-                      title: const Text('最近诊断记录（本地保留 7 天）'),
-                      children: [
-                        SelectableText(
-                            info['diagnostics']?.toString() ?? '暂无记录')
-                      ]),
-                  if (error != null || info['error'] != null)
-                    Text(error ?? info['error'].toString(),
-                        style: const TextStyle(color: Colors.red)),
-                ])));
+              const Text('消耗记录保存在手机本地，覆盖安装会保留。电脑需开启同步，手机才能获取新数据。',
+                  style: TextStyle(fontSize: 12, color: HubTheme.muted)),
+            ])
+          ],
+        ),
+      ]),
+    ));
   }
 }

@@ -10,6 +10,7 @@ import {showsFiveHour,visibleQuotaWindows} from '../quotaVisibility';
 import {request} from '../api';
 import {scope} from '../session';
 import {remainingLabel} from '../quotaFormat';
+import {localTimestamp, refreshWithCache} from '../cacheRefresh';
 import {alertState as reminderState} from '../strongReminderPolicy';
 type Pref={enabled:boolean;near_hours:number;spare_percent:number;low_percent:number;pace_lead:number;credit_hours:number;cooldown_hours:number;quiet_start:number;quiet_end:number;utc_offset_minutes:number};
 type Advice={kind:string;title:string;body:string;priority:number;interrupt?:boolean;source_name?:string};
@@ -43,12 +44,43 @@ export default function CodexOverview(){
  const[error,setError]=useState(''),[selected,setSelected]=useState(''),[message,setMessage]=useState(''),[actionBusy,setActionBusy]=useState('');
  const actionLock=useRef(false);
  const[editing,setEditing]=useState<Pref|null>(null),[saving,setSaving]=useState(false),[clock,setClock]=useState(Date.now());
- async function reload(){try{const next=await request<Overview>('/api/v1/codex/overview');localStorage.setItem(key,JSON.stringify(next));setData(next);setError('');}catch{setError('服务暂不可用，显示上次缓存。已暂停桌面提醒。');}}
- useEffect(()=>{let alive=true,busy=false;const controller=new AbortController();const update=async()=>{if(busy)return;busy=true;try{const next=await request<Overview>('/api/v1/codex/overview',{signal:controller.signal});if(alive){localStorage.setItem(key,JSON.stringify(next));setData(next);setError('');}}catch{if(alive)setError('服务暂不可用，显示上次缓存。已暂停桌面提醒。');}finally{busy=false;}};window.addEventListener('aihub-reminders-changed',update);void update();const timer=setInterval(()=>void update(),CODEX_POLL_MS);const clockTimer=setInterval(()=>setClock(Date.now()),60000);return()=>{alive=false;controller.abort();window.removeEventListener('aihub-reminders-changed',update);clearInterval(timer);clearInterval(clockTimer);};},[key]);
+ const [refreshing,setRefreshing]=useState(false),[cacheError,setCacheError]=useState('');
+ const refreshRef=useRef<(afterPending?:boolean)=>Promise<void>>(async()=>{});
+ const reload=(afterPending=false)=>refreshRef.current(afterPending);
+ useEffect(()=>{
+  let alive=true,inFlight:Promise<void>|null=null;
+  const controller=new AbortController();
+  setSelected('');setEditing(null);setError('');setCacheError('');
+  try{setData(JSON.parse(localStorage.getItem(key)||'null'));}catch{setData(null);}
+  const update=()=>{
+   if(inFlight)return inFlight;
+   if(!alive)return Promise.resolve();
+   setRefreshing(true);
+   inFlight=(async()=>{
+    try{
+     const result=await refreshWithCache(
+      ()=>request<Overview>('/api/v1/codex/overview',{signal:controller.signal}),
+      next=>{if(alive)localStorage.setItem(key,JSON.stringify(next));});
+     if(alive){setData(result.data);setCacheError(result.cacheError);setError('');setClock(Date.now());}
+    }catch{if(alive)setError('服务暂不可用，显示上次缓存。已暂停节奏建议。');}
+    finally{inFlight=null;if(alive)setRefreshing(false);}
+   })();
+   return inFlight;
+  };
+  refreshRef.current=async(afterPending=false)=>{if(afterPending&&inFlight)await inFlight;await update();};
+  const onChanged=()=>{void refreshRef.current(true);};
+  const onVisible=()=>{if(document.visibilityState==='visible')void update();};
+  window.addEventListener('aihub-reminders-changed',onChanged);
+  document.addEventListener('visibilitychange',onVisible);
+  void update();
+  const timer=setInterval(()=>{if(document.visibilityState!=='hidden')void update();},CODEX_POLL_MS);
+  const clockTimer=setInterval(()=>setClock(Date.now()),60000);
+  return()=>{alive=false;controller.abort();window.removeEventListener('aihub-reminders-changed',onChanged);document.removeEventListener('visibilitychange',onVisible);clearInterval(timer);clearInterval(clockTimer);};
+ },[key]);
 
- async function action(id:string,action:string){if(actionLock.current)return;actionLock.current=true;setActionBusy(id);try{await request('/api/v1/codex/alerts/'+encodeURIComponent(id),{method:'POST',body:JSON.stringify({action})});await reload();}catch{setMessage('暂时无法更新提醒，请稍后重试。');}finally{actionLock.current=false;setActionBusy('');}}
- async function save(){if(!editing)return;if(editing.spare_percent<=editing.low_percent){setMessage('多用提醒的剩余阈值必须高于低额度阈值。');return;}setSaving(true);try{await request('/api/v1/codex/preferences',{method:'PATCH',body:JSON.stringify(editing)});setEditing(null);setMessage('规则已保存。电脑端会在下次同步时更新手机。');await reload();}catch(e){setMessage(String(e));}finally{setSaving(false);}}
- async function savePlan(plan_type:string){try{await request('/api/v1/codex/plan',{method:'PUT',body:JSON.stringify({plan_type})});await reload();setMessage('套餐设置已保存；额度和提醒已重新计算。');}catch(e){setMessage(String(e));}}
+ async function action(id:string,action:string){if(actionLock.current)return;actionLock.current=true;setActionBusy(id);try{await request('/api/v1/codex/alerts/'+encodeURIComponent(id),{method:'POST',body:JSON.stringify({action})});await reload(true);}catch{setMessage('暂时无法更新提醒，请稍后重试。');}finally{actionLock.current=false;setActionBusy('');}}
+ async function save(){if(!editing)return;if(editing.spare_percent<=editing.low_percent){setMessage('多用提醒的剩余阈值必须高于低额度阈值。');return;}setSaving(true);try{await request('/api/v1/codex/preferences',{method:'PATCH',body:JSON.stringify(editing)});setEditing(null);setMessage('规则已保存。电脑端会在下次同步时更新手机。');await reload(true);}catch(e){setMessage(String(e));}finally{setSaving(false);}}
+ async function savePlan(plan_type:string){try{await request('/api/v1/codex/plan',{method:'PUT',body:JSON.stringify({plan_type})});await reload(true);setMessage('套餐设置已保存；额度和提醒已重新计算。');}catch(e){setMessage(String(e));}}
  const d=data?.devices.find(x=>x.id===selected)||data?.devices[0];const age=clock-Date.parse(d?.snapshot.observed_at||'');const stale=!!error||!d||d.snapshot.status!=='ok'||!Number.isFinite(age)||age < -120000||age>CODEX_STALE_MS;const state=stale?'stale':d.analysis.state;
  const planType=data?.plan?.plan_type||'unknown';
  const metrics=visibleQuotaWindows(d?.analysis.metrics||[],planType);
@@ -64,9 +96,9 @@ export default function CodexOverview(){
  {key:'quiet_start',label:'免打扰开始 · 当地时',min:0,max:23,hint:'默认晚上 23 点'},{key:'quiet_end',label:'免打扰结束 · 当地时',min:0,max:23,hint:'默认早上 8 点；起止相同为关闭'},
  {key:'utc_offset_minutes',label:'时区 · UTC 偏移分钟',min:-720,max:840,hint:'北京时间 480；出差时可调整'}];
  if(!data&&!error)return <section className="panel"><p className="eyebrow">CODEX WORKSPACE</p><div className="skeleton" style={{height:26,width:"38%"}}/><div className="skeleton" style={{height:64,marginTop:16}}/><div className="advisor-metrics" style={{marginTop:14}}><div className="skeleton" style={{height:150,width:210}}/><div className="skeleton" style={{height:150,width:210}}/></div></section>;
- return <section className="advisor"><header className="advisor-header"><div><p className="eyebrow">CODEX WORKSPACE</p><h1>{({overview:'额度总览',usage:'消耗分析',plan:'使用计划',reminders:'提醒中心',news:'重置消息',settings:'提醒设置'} as Record<string,string>)[tab]}</h1><p className="lead">{({overview:'掌握剩余额度，从容安排下一步。',usage:'查看额度变化与消耗趋势，了解你的使用节奏。',plan:'预留、分配、复盘，让下一次重置之前的工作更从容。',reminders:'集中处理额度、节奏和到期提醒，已提醒事件不会再次弹出。',news:'查看 Tibo 原帖和最近检查结果，账户变化以实际采集为准。',settings:'统一管理规则阈值、免打扰时间和此设备的通知权限。'} as Record<string,string>)[tab]}</p></div><div className="advisor-tools">{data&&data.devices.length>1&&<select aria-label="分析哪台电脑" value={d?.id} onChange={e=>setSelected(e.target.value)}>{data.devices.map(x=><option key={x.id} value={x.id}>{x.name}</option>)}</select>}{tab!=='usage'&&<button className="btn secondary" onClick={()=>void reload()}><RefreshCw size={15} aria-hidden="true"/>刷新</button>}</div></header>
- <div className="advisor-status"><span className={'status-dot'+(stale?' offline':'')}/><span>{stale?'等待电脑新数据':d?.name+(window.aihubDesktop?' · 已保存':' · 已同步')}</span><span>{d?.snapshot?.observed_at?when(d.snapshot.observed_at):'尚未采集'}</span>{data&&data.plan&&<span className="device-tag">{data.plan.plan_type==='unknown'?'套餐未确认':data.plan.plan_type==='plus'?'Plus':data.plan.plan_type==='pro'?'Pro':'Pro Lite'}</span>}<Link to="/connections">管理连接 ↗</Link></div>
- {error&&<p className="error" role="status">{error}</p>}{message&&<p className="sync-banner" role="status">{message}<button className="btn ghost" onClick={()=>setMessage('')}>关闭</button></p>}
+ return <section className="advisor"><header className="advisor-header"><div><p className="eyebrow">CODEX WORKSPACE</p><h1>{({overview:'额度总览',usage:'消耗分析',plan:'使用计划',reminders:'提醒中心',news:'重置消息',settings:'提醒设置'} as Record<string,string>)[tab]}</h1><p className="lead">{({overview:'掌握剩余额度，从容安排下一步。',usage:'查看额度变化与消耗趋势，了解你的使用节奏。',plan:'预留、分配、复盘，让下一次重置之前的工作更从容。',reminders:'集中处理额度、节奏和到期提醒，已提醒事件不会再次弹出。',news:'查看 Tibo 原帖和最近检查结果，账户变化以实际采集为准。',settings:'统一管理规则阈值、免打扰时间和此设备的通知权限。'} as Record<string,string>)[tab]}</p></div><div className="advisor-tools">{data&&data.devices.length>1&&<select aria-label="分析哪台电脑" value={d?.id} onChange={e=>setSelected(e.target.value)}>{data.devices.map(x=><option key={x.id} value={x.id}>{x.name}</option>)}</select>}{tab!=='usage'&&<button className="btn secondary" disabled={refreshing} onClick={()=>void reload()}><RefreshCw size={15} className={refreshing?'spinning':''} aria-hidden="true"/>{refreshing?'刷新中…':'刷新'}</button>}</div></header>
+ <div className="advisor-status"><span className={'status-dot'+(stale?' offline':'')}/><span>{stale?'等待电脑新数据':d?.name+(window.aihubDesktop?' · 已保存':' · 已同步')}</span><span>数据截至 {localTimestamp(d?.snapshot?.observed_at,'采集时间未知')}</span>{data&&data.plan&&<span className="device-tag">{data.plan.plan_type==='unknown'?'套餐未确认':data.plan.plan_type==='plus'?'Plus':data.plan.plan_type==='pro'?'Pro':'Pro Lite'}</span>}<Link to="/connections">管理连接 ↗</Link></div>
+ {error&&<p className="error" role="status">{error}</p>}{cacheError&&<p className="sync-banner" role="status">{cacheError}</p>}{message&&<p className="sync-banner" role="status">{message}<button className="btn ghost" onClick={()=>setMessage('')}>关闭</button></p>}
  {data?.plan?.plan_type==='unknown'&&<p className="sync-banner">Codex 套餐尚未确认。<Link to="/codex?tab=settings">前往设置，确认套餐</Link></p>}
 
  <nav className="workspace-tabs" aria-label="Codex 功能标签">{tabs.map(([id,label])=><Link key={id} to={'/codex?tab='+id} aria-current={tab===id?'page':undefined}>{label}{id==='reminders'&&pending.length>0&&<span>{pending.length}</span>}</Link>)}</nav>

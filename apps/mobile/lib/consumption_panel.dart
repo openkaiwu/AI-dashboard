@@ -1,3 +1,4 @@
+import 'display_time.dart';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'api.dart';
@@ -6,7 +7,9 @@ import 'theme.dart';
 
 String consumptionFreshness(Json data) {
   final observed = DateTime.tryParse(data['data_as_of'] as String? ?? '');
-  final time = observed == null ? '采集时间未知' : '数据截至 ${observed.toLocal()}';
+  final time = observed == null
+      ? '采集时间未知'
+      : '数据截至 ${formatLocalTimestamp(data['data_as_of'])}';
   const sources = {
     'server_rollup': '服务器采样',
     'local_backup': '本机备份聚合',
