@@ -272,7 +272,8 @@ class _CursorPageState extends State<CursorPage> {
           const SizedBox(height: 5),
           const Text('实际用量与重置时间，一眼掌握。'),
           if (error != null)
-            Text(error!, style: const TextStyle(color: HubTheme.warn)),
+            Text(error!,
+                style: TextStyle(color: HubTheme.colors(context).warn)),
           Align(
               alignment: Alignment.centerRight,
               child: TextButton.icon(

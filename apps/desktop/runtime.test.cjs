@@ -43,6 +43,36 @@ test('blocked sessions stop collection rather than continuing to upload',async t
  h.runtime.writeDesktopSession('default',{token:'test-token',device_id:'device',blocked:true});
  await h.runtime.syncBridgeFromSession(h.wc,{});assert.ok(h.killed.includes(100));assert.equal(h.children.length,1);
 });
+test('pause stops the collector and resume restarts it without new token',async t=>{
+ const h=runtimeFixture(t);await h.runtime.syncBridgeFromSession(h.wc,{});
+ assert.equal(h.children.length,1);
+ const paused=await h.runtime.pauseBridge();
+ assert.ok(h.killed.includes(100));assert.equal(paused.paused,true);assert.equal(paused.running,false);
+ await h.runtime.syncBridgeFromSession(h.wc,{});assert.equal(h.children.length,1);
+ const resumed=await h.runtime.resumeBridge();
+ assert.equal(resumed.paused,false);assert.equal(resumed.running,true);assert.equal(h.children.length,2);
+ h.runtime.stopManaged();
+});
+test('scan roots persist locally and reject missing directories',t=>{
+ const h=runtimeFixture(t);
+ const existing=path.join(h.dir,'configs');fs.mkdirSync(existing);
+ assert.equal(JSON.stringify(h.runtime.scanRoots()),'{"roots":[]}');
+ assert.throws(()=>h.runtime.addScanRoots([path.join(h.dir,'missing')]),/不存在/);
+ h.runtime.addScanRoots([existing]);
+ assert.deepEqual([...h.runtime.scanRoots().roots],[existing]);
+ h.runtime.removeScanRoot(existing);
+ assert.equal(JSON.stringify(h.runtime.scanRoots()),'{"roots":[]}');
+});
+test('bridge status reports process, configuration and collection freshness',async t=>{
+ const h=runtimeFixture(t);
+ const status=await h.runtime.bridgeStatus();
+ assert.equal(status.running,false);assert.equal(status.paused,false);
+ assert.equal(status.binary_present,true);assert.equal(status.configured,true);
+ assert.equal(status.server,'https://hub.example.com');
+ await h.runtime.syncBridgeFromSession(h.wc,{});
+ assert.equal((await h.runtime.bridgeStatus()).running,true);
+ h.runtime.stopManaged();
+});
 test('local startup calls the platform database bootstrap',async t=>{
  const h=runtimeFixture(t);h.runtime.setUserMode('local');await h.runtime.ensureReady();assert.equal(h.postgres(),1);
 });

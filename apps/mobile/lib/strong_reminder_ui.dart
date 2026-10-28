@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'store.dart';
+import 'theme.dart';
 
 class StrongReminderCopy {
   static String providerLabel(Json n) {
@@ -81,8 +82,8 @@ class StrongReminderDialog extends StatelessWidget {
                   child: Chip(
                     label: Text(StrongReminderCopy.severityLabel(severity)),
                     backgroundColor: severity == 'critical'
-                        ? const Color(0xFFFFE4E4)
-                        : const Color(0xFFFFF3D6),
+                        ? Theme.of(context).colorScheme.errorContainer
+                        : HubTheme.colors(context).warnSurface,
                   ),
                 ),
               for (final line in lines)
@@ -95,7 +96,7 @@ class StrongReminderDialog extends StatelessWidget {
                           ? Theme.of(context)
                               .textTheme
                               .labelSmall
-                              ?.copyWith(color: Colors.black45)
+                              ?.copyWith(color: HubTheme.colors(context).muted)
                           : Theme.of(context).textTheme.bodyMedium,
                     ),
                   ),

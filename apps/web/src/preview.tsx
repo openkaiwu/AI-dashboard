@@ -6,6 +6,10 @@ import { MemoryRouter } from 'react-router-dom';
 import './styles.css';
 import './foundation.css';
 import './interface.css';
+import './appearance.css';
+import { initializeTheme } from './theme';
+
+initializeTheme();
 
 if (!import.meta.env.DEV) throw new Error('Preview is available in development only');
 const previewParams=new URLSearchParams(location.search);

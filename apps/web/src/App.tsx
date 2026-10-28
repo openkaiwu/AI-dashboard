@@ -1,4 +1,5 @@
-import { Activity, ArrowUpRight, Bell, Blocks, ChevronDown, ChevronRight, FolderOpen, LayoutDashboard, LogOut, Menu, MessageSquare, Monitor, NotebookPen, Plug, Server, Settings2, ShieldCheck, Ticket, Users, X, type LucideIcon } from "lucide-react";
+import { Activity, ArrowUpRight, Bell, Blocks, ChevronDown, ChevronRight, FolderOpen, LayoutDashboard, LogOut, Menu, MessageSquare, Monitor, NotebookPen, Plug, Server, Settings2, ShieldCheck, Ticket, Users, Wrench, X, type LucideIcon } from "lucide-react";
+import ThemeSwitch from "./ThemeSwitch";
 import StrongReminders from "./StrongReminders";
 import { NavLink, Navigate, Outlet, Route, Routes, useNavigate, useLocation } from "react-router-dom";
 import { useEffect, useRef, useState } from "react";
@@ -21,6 +22,7 @@ import CodexConnections from "./pages/CodexConnections";
 import CursorConnections from "./pages/CursorConnections";
 import Admin from "./pages/Admin";
 import ModeSelect from "./pages/ModeSelect";
+import Desktop from "./pages/Desktop";
 import CursorOverview from "./pages/CursorOverview";
 import { ActiveProvider, getActiveProvider, hasActiveProvider, setActiveProvider } from "./providerMode";
 import { flushManual, pendingManualCount, clearManualQueue } from "./manualQueue";
@@ -36,6 +38,7 @@ export default function App() {
           <Route path="/" element={<HomeRedirect />} />
           <Route path="/notes" element={<Sync />} />
           <Route path="/connections" element={<CodexConnections />} />
+          <Route path="/desktop" element={<Desktop />} />
           <Route path="/cursor/connections" element={<CursorConnections />} />
           <Route path="/cursor" element={<CursorOverview />} />
           <Route path="/codex" element={<Codex />} />
@@ -135,6 +138,7 @@ function Shell() {
   ];
   const connectionItems: Item[] = [
     { to: connections, label: "电脑采集器", icon: Plug },
+    ...(window.aihubDesktop ? [{ to: "/desktop", label: "桌面控制台", icon: Wrench }] : []),
     { to: "/devices", label: "设备管理", icon: Monitor },
   ];
   const extra: Item[] = mode === "codex" ? [
@@ -172,7 +176,7 @@ function Shell() {
         <header className="workspace-bar">
           <div className="desktop-breadcrumb"><span>我的工作空间</span><ChevronRight size={14} aria-hidden="true"/><strong>{currentPage}</strong></div>
           <div className="mobile-brand">{brand}</div>
-          <div className="workspace-bar-actions"><span className="network-state"><span className={"status-dot" + (online ? "" : " offline")}/>{online ? "本机网络可用" : "当前离线"}</span><NavLink className="icon-button" to={home + "?tab=settings"} aria-label="提醒设置"><Settings2 size={18}/></NavLink></div>
+          <div className="workspace-bar-actions"><ThemeSwitch/><span className="network-state"><span className={"status-dot" + (online ? "" : " offline")}/>{online ? "本机网络可用" : "当前离线"}</span><NavLink className="icon-button" to={home + "?tab=settings"} aria-label="提醒设置"><Settings2 size={18}/></NavLink></div>
         </header>
         <main className="main" id="workspace-content" tabIndex={-1}>
           <StrongReminders />

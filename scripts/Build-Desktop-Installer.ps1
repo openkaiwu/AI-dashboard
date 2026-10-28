@@ -1,5 +1,6 @@
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
+& (Join-Path $root 'scripts/Stage-Desktop-UI.ps1')
 & (Join-Path $root 'scripts/Stage-Desktop-Binaries.ps1')
 Push-Location (Join-Path $root 'apps/desktop')
 try {

@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'api.dart';
 import 'store.dart';
@@ -31,8 +32,7 @@ String notificationCondition(Object? value) =>
       'network_or_delivery_error': '网络或送达检查失败，请查看诊断',
       'duplicate_or_inactive': '事件已提醒或已失效'
     }[value?.toString()] ??
-    value?.toString() ??
-    '尚未检查';
+    (value == null || value.toString().isEmpty ? '尚未检查' : '状态暂未识别，请查看诊断记录');
 
 class BackgroundSettings extends StatefulWidget {
   final HubApi api;
@@ -46,15 +46,24 @@ class _BackgroundSettingsState extends State<BackgroundSettings>
   Json info = {};
   bool busy = false;
   String? error;
+  String? message;
+  Timer? statusTimer;
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     reload();
+    statusTimer = Timer.periodic(const Duration(seconds: 15), (_) {
+      if (!busy &&
+          WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed) {
+        reload();
+      }
+    });
   }
 
   @override
   void dispose() {
+    statusTimer?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
@@ -78,6 +87,7 @@ class _BackgroundSettingsState extends State<BackgroundSettings>
     setState(() {
       busy = true;
       error = null;
+      message = null;
     });
     try {
       await action();
@@ -106,16 +116,33 @@ class _BackgroundSettingsState extends State<BackgroundSettings>
         } else {
           await BackgroundSync.check(widget.api);
         }
+        final result = await BackgroundSync.status();
+        if (mounted) {
+          setState(() {
+            info = result;
+            if (result['error'] != null) {
+              error = '本次检查未完成：${result['error']}';
+            } else {
+              message =
+                  '${makePrimary ? '已申请主提醒手机。' : '检查完成。'}${notificationCondition(result['last_reason'] ?? result['notification_state'])}';
+            }
+          });
+        }
       });
 
   Widget condition(String label, bool ready) => Container(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
         decoration: BoxDecoration(
-            color: ready ? HubTheme.accentDim : HubTheme.bg2,
+            color: ready
+                ? HubTheme.colors(context).accentDim
+                : HubTheme.colors(context).bg2,
             borderRadius: BorderRadius.circular(8)),
         child: Row(mainAxisSize: MainAxisSize.min, children: [
           Icon(ready ? Icons.check_circle_outline : Icons.info_outline,
-              size: 15, color: ready ? HubTheme.accent : HubTheme.warn),
+              size: 15,
+              color: ready
+                  ? HubTheme.colors(context).accent
+                  : HubTheme.colors(context).warn),
           const SizedBox(width: 6),
           Text(label, style: const TextStyle(fontSize: 12)),
         ]),
@@ -124,7 +151,8 @@ class _BackgroundSettingsState extends State<BackgroundSettings>
   Widget record(String label, Object? value) => Padding(
         padding: const EdgeInsets.only(bottom: 8),
         child: Text('$label：${formatLocalTimestamp(value)}',
-            style: const TextStyle(fontSize: 12, color: HubTheme.muted)),
+            style:
+                TextStyle(fontSize: 12, color: HubTheme.colors(context).muted)),
       );
 
   @override
@@ -137,8 +165,8 @@ class _BackgroundSettingsState extends State<BackgroundSettings>
       padding: const EdgeInsets.all(16),
       child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
         Row(children: [
-          const Icon(Icons.notifications_active_outlined,
-              color: HubTheme.accent, size: 21),
+          Icon(Icons.notifications_active_outlined,
+              color: HubTheme.colors(context).accent, size: 21),
           const SizedBox(width: 10),
           Expanded(
               child: Text('这台手机的提醒',
@@ -176,11 +204,13 @@ class _BackgroundSettingsState extends State<BackgroundSettings>
         const SizedBox(height: 6),
         if (enabled) record('最近检查', info['last_sync']),
         if (enabled && info['primary'] != true)
-          const Text('将本机设为主提醒手机后，才能接收真实事件提醒。',
-              style: TextStyle(fontSize: 12, color: HubTheme.warn)),
+          Text('将本机设为主提醒手机后，才能接收真实事件提醒。',
+              style: TextStyle(
+                  fontSize: 12, color: HubTheme.colors(context).warn)),
         if (readiness.hint != null && info.isNotEmpty)
           Text(readiness.hint!,
-              style: const TextStyle(fontSize: 12, color: HubTheme.warn)),
+              style: TextStyle(
+                  fontSize: 12, color: HubTheme.colors(context).warn)),
         const SizedBox(height: 10),
         Wrap(spacing: 8, runSpacing: 4, children: [
           FilledButton.icon(
@@ -202,13 +232,24 @@ class _BackgroundSettingsState extends State<BackgroundSettings>
               child: const Text('通知与横幅设置')),
         ]),
         const SizedBox(height: 6),
-        const Text('同一事件只提醒一次，30 分钟内合并提醒。应用打开时优先显示应用内提示。',
-            style: TextStyle(fontSize: 12, color: HubTheme.muted)),
+        Text('同一事件只提醒一次，30 分钟内合并提醒。应用打开时优先显示应用内提示。',
+            style:
+                TextStyle(fontSize: 12, color: HubTheme.colors(context).muted)),
+        if (message != null)
+          Padding(
+              padding: const EdgeInsets.only(top: 10),
+              child: Semantics(
+                  liveRegion: true,
+                  child: Text(message!,
+                      style: TextStyle(
+                          color: HubTheme.colors(context).accent,
+                          fontSize: 12)))),
         if (error != null || info['error'] != null)
           Padding(
               padding: const EdgeInsets.only(top: 10),
               child: Text(error ?? info['error'].toString(),
-                  style: const TextStyle(color: HubTheme.warn, fontSize: 12))),
+                  style: TextStyle(
+                      color: HubTheme.colors(context).warn, fontSize: 12))),
         ExpansionTile(
           tilePadding: EdgeInsets.zero,
           title: const Text('后台运行与排查', style: TextStyle(fontSize: 13)),
@@ -221,13 +262,15 @@ class _BackgroundSettingsState extends State<BackgroundSettings>
                   info['battery_unrestricted'] == true
                       ? '电池：已允许不受优化限制。'
                       : '省电或休眠可能延迟后台检查。请允许后台运行；小米／HyperOS 还需检查自启动、悬浮通知与锁屏通知。',
-                  style: const TextStyle(fontSize: 12, color: HubTheme.muted)),
+                  style: TextStyle(
+                      fontSize: 12, color: HubTheme.colors(context).muted)),
               const SizedBox(height: 10),
               record('数据截至', info['source_observed_at']),
               record('后台最近执行', info['last_run']),
               record('最近提醒展示／系统提交', info['last_notification']),
-              const Text('后台由系统约每 15 分钟安排。系统提交成功不代表已看到横幅，仍受免打扰与手机设置影响。',
-                  style: TextStyle(fontSize: 12, color: HubTheme.muted)),
+              Text('后台由系统约每 15 分钟安排。系统提交成功不代表已看到横幅，仍受免打扰与手机设置影响。',
+                  style: TextStyle(
+                      fontSize: 12, color: HubTheme.colors(context).muted)),
               Wrap(spacing: 8, children: [
                 TextButton(
                     onPressed: busy
@@ -246,12 +289,34 @@ class _BackgroundSettingsState extends State<BackgroundSettings>
                                   title: 'AI Hub 通知测试',
                                   body: '这是测试通知，不改变额度或真实提醒。');
                               if (mounted) {
-                                setState(() => error = ok
-                                    ? '已提交系统通知，请确认手机上是否出现横幅。'
-                                    : '通知未发出，请检查权限与通知渠道。');
+                                setState(() {
+                                  if (ok) {
+                                    message = '已提交系统通知，请确认通知栏或横幅。系统免打扰可能隐藏横幅。';
+                                  } else {
+                                    error = '通知未发出，请检查权限与通知渠道。';
+                                  }
+                                });
                               }
                             }),
                     child: const Text('测试系统通知')),
+                TextButton(
+                    onPressed: busy
+                        ? null
+                        : () => showDialog<void>(
+                            context: context,
+                            builder: (context) => AlertDialog(
+                                  icon: const Icon(
+                                      Icons.notifications_active_outlined),
+                                  title: const Text('应用内提示演示'),
+                                  content: const Text(
+                                      '这是一条界面演示，不改变真实提醒记录。真实提醒仍按主手机、免打扰时段、数据时效与合并规则触发。'),
+                                  actions: [
+                                    TextButton(
+                                        onPressed: () => Navigator.pop(context),
+                                        child: const Text('我知道了'))
+                                  ],
+                                )),
+                    child: const Text('演示应用内提示')),
               ]),
               if (info['analysis_error'] != null)
                 Text(info['analysis_error'].toString()),
@@ -262,8 +327,9 @@ class _BackgroundSettingsState extends State<BackgroundSettings>
                   children: [
                     SelectableText(info['diagnostics']?.toString() ?? '暂无记录')
                   ]),
-              const Text('消耗记录保存在手机本地，覆盖安装会保留。电脑需开启同步，手机才能获取新数据。',
-                  style: TextStyle(fontSize: 12, color: HubTheme.muted)),
+              Text('消耗记录保存在手机本地，覆盖安装会保留。电脑需开启同步，手机才能获取新数据。',
+                  style: TextStyle(
+                      fontSize: 12, color: HubTheme.colors(context).muted)),
             ])
           ],
         ),

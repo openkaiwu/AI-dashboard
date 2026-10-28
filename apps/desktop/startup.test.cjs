@@ -8,14 +8,14 @@ function harness({failures=0,remember=true,startup=false}={}){
  const calls={load:0,dialogs:0,sync:0,show:0,urls:[],delays:[],mode:'cloud'};
  let window;const menu=[];
  class Window extends EventEmitter{
-  constructor(){super();window=this;this.webContents=new EventEmitter();Object.assign(this.webContents,{mainFrame:{url:'https://hub.example.com/'},setWindowOpenHandler(){},session:{setPermissionRequestHandler(){}}});}
+  constructor(){super();window=this;this.webContents=new EventEmitter();Object.assign(this.webContents,{mainFrame:{url:'https://hub.example.com/'},setWindowOpenHandler(){},session:{setPermissionRequestHandler(){},async clearStorageData(){}}});}
   removeMenu(){} setIcon(){} show(){calls.show++;} focus(){} async loadFile(){}
   async loadURL(url){calls.urls.push(url);calls.load++;if(calls.load<=failures)throw Error('ERR_INTERNET_DISCONNECTED');this.webContents.emit('did-finish-load');}
  }
  const runtime={getUiOrigin:()=> 'https://hub.example.com',getActiveMode:()=>calls.mode,readModePreference:()=>({remember,mode:'cloud'}),setUserMode:m=>calls.mode=m,loadConfig:()=>({cloudServer:'https://hub.example.com'}),DEFAULT_CLOUD:'http://127.0.0.1:8080',ensureReady:async()=>{},syncBridgeFromSession:async()=>{calls.sync++;},stopManaged(){},resetMode(){},clearModePreference(){remember=false;},dataDir:()=>'',startupMessage:()=>''};
  const electron={app:{requestSingleInstanceLock:()=>true,on(){},whenReady:()=>Promise.resolve(),setAppUserModelId(){},setLoginItemSettings(){},quit(){}},BrowserWindow:Window,Tray:class{setToolTip(){}setContextMenu(items){menu.splice(0,menu.length,...items);}on(){}},Menu:{buildFromTemplate:x=>x},nativeImage:{createFromPath:()=>({resize:()=>({})})},ipcMain:{handle(){},on(){}},dialog:{showMessageBox:async()=>{calls.dialogs++;return {response:0};}},shell:{}};
  const fakeFs={...fs,writeFileSync(){}};
- vm.runInNewContext(fs.readFileSync(__dirname+'/main.cjs','utf8'),{require:n=>n==='electron'?electron:n==='./runtime.cjs'?runtime:n==='node:fs'?fakeFs:require(n),__dirname,URL,process:{argv:startup?['AIHub','--startup']:['AIHub'],env:{}},setInterval:()=>({unref(){}}),setTimeout:(fn,ms)=>{calls.delays.push(ms);setImmediate(fn);},setImmediate});
+ vm.runInNewContext(fs.readFileSync(__dirname+'/main.cjs','utf8'),{require:n=>n==='electron'?electron:n==='./runtime.cjs'?runtime:n==='./bundledUI.cjs'?{install:async()=>{}}:n==='node:fs'?fakeFs:require(n),__dirname,URL,process:{argv:startup?['AIHub','--startup']:['AIHub'],env:{}},setInterval:()=>({unref(){}}),setTimeout:(fn,ms)=>{calls.delays.push(ms);setImmediate(fn);},setImmediate});
  return {calls,menu,get window(){return window;}};
 }
 const settle=async()=>{for(let i=0;i<15;i++)await new Promise(r=>setImmediate(r));};

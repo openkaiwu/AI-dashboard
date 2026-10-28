@@ -1,0 +1,35 @@
+:root { --primary-button: #3563e9; --warn-bg: #fff7e9; --danger-bg: #fce7eb; }
+:root[data-theme=dark] {
+  --bg: #101722; --bg-2: #202d40; --panel: #182232; --panel-2: #23334f;
+  --ink: #e7edf7; --muted: #aebdd2; --faint: #9fafc6; --line: #34435b;
+  --accent: #a2baff; --accent-dim: #25365a; --warn: #f0be73;
+  --danger: #ff9aa6; --info: #a2baff; --warn-bg: #382e22; --danger-bg: #3d2531;
+  --shadow: 0 8px 32px #0003;
+}
+.appearance-control { position: relative; }
+.appearance-control small { display: block; color: var(--warn); font-size: 11px; }
+.theme-switch { display: flex; align-items: center; gap: 7px; padding: 0 10px; border: 1px solid var(--line); border-radius: 10px; color: var(--muted); background: var(--panel); }
+.theme-switch select { color: var(--ink); font: inherit; font-size: 12px; min-height: 38px; padding: 6px 0; border: 0; background: transparent; cursor: pointer; }
+.auth-appearance { display: flex; justify-content: flex-end; margin-bottom: 22px; }
+.page-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 20px; }
+.page-head > div { min-width: 0; }
+.btn { background: var(--primary-button); color: #fff; }
+.btn.secondary, .btn.ghost { color: var(--ink); }
+.btn.ghost { background: transparent; }
+.brand-mark, .auth-orbit, .skip-link { background: var(--primary-button); }
+.consumption-notice { background: var(--warn-bg); color: var(--warn); border-color: var(--line); }
+.consumption-updated.stale { color: var(--warn); }
+[data-theme=dark] .advice-hero, [data-theme=dark] .consumption-stat.selected { background: var(--accent-dim); border-color: var(--line); }
+[data-theme=dark] .advice-hero.slow, [data-theme=dark] .banner, [data-theme=dark] .hint { background: var(--warn-bg); border-color: var(--line); color: var(--warn); }
+[data-theme=dark] .advice-hero.stale, [data-theme=dark] .advice-hero.unknown,
+[data-theme=dark] .hero-symbol, [data-theme=dark] .consumption-selection,
+[data-theme=dark] .consumption-chart-panel .consumption-placeholder,
+[data-theme=dark] .consumption-placeholder.error .placeholder-icon { background: var(--bg-2); color: var(--muted); }
+[data-theme=dark] .account-avatar { background: var(--bg-2); color: var(--ink); }
+[data-theme=dark] .consumption-bars { background: repeating-linear-gradient(to top,transparent 0,transparent calc(50% - 1px),var(--line) calc(50% - 1px),var(--line) 50%); }
+[data-theme=dark] .btn.danger:hover { background: var(--danger-bg); }
+[data-theme=dark] .skeleton { background: var(--bg-2); }
+[data-theme=dark] .strong-reminder { background: var(--panel); }
+[data-theme=dark] .conflict-card { background: var(--warn-bg); }
+@media (max-width: 900px) { .workspace-bar-actions { gap: 8px; } .theme-switch { gap: 4px; padding: 0 6px; } }
+@media (max-width: 540px) { .page-head { flex-wrap: wrap; } .theme-switch select { max-width: 82px; } }

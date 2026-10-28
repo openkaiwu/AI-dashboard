@@ -4,6 +4,7 @@ package main
 import (
 	"aihub.dev/server/internal/codex"
 	"aihub.dev/server/internal/cursor"
+	"aihub.dev/server/internal/desktoptools"
 	"aihub.dev/server/internal/provider"
 	"bytes"
 	"context"
@@ -62,7 +63,36 @@ func run() error {
 	path := flag.String("config", "bridge.json", "Local configuration file")
 	once := flag.Bool("once", false, "Collect and upload once")
 	probe := flag.String("probe", "", "Read quota only without uploading: codex, cursor, or absolute codex executable path")
+	desktopTool := flag.Bool("desktop-tool", false, "Run a bounded local desktop parser on stdin; no network or credentials")
 	flag.Parse()
+	if *desktopTool {
+		var input desktoptools.Input
+		decoder := json.NewDecoder(io.LimitReader(os.Stdin, 48*1024*1024))
+		decoder.DisallowUnknownFields()
+		if e := decoder.Decode(&input); e != nil {
+			return errors.New("invalid desktop tool input")
+		}
+		var extra any
+		if decoder.Decode(&extra) != io.EOF {
+			return errors.New("unexpected desktop tool input")
+		}
+		if input.Action == "scan" {
+			if len(input.Roots) > 8 {
+				return errors.New("too many scan roots")
+			}
+			for _, root := range input.Roots {
+				if !filepath.IsAbs(root) {
+					return errors.New("absolute scan root required")
+				}
+			}
+			return json.NewEncoder(os.Stdout).Encode(map[string]any{"entries": collectConfigScan(input.Roots)})
+		}
+		result, e := desktoptools.Run(input)
+		if e != nil {
+			return e
+		}
+		return json.NewEncoder(os.Stdout).Encode(result)
+	}
 
 	if *probe != "" {
 		ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)

@@ -19,7 +19,10 @@ else {
  app.whenReady().then(async()=>{
   if(platform.appUserModelIdSupported())app.setAppUserModelId('local.aihub.codex');
   if(platform.loginItemSupported())app.setLoginItemSettings({openAtLogin:true,args:['--startup']});
-  win=new BrowserWindow({width:1220,height:860,minWidth:420,minHeight:600,title:'AI Hub · Codex 使用助手',backgroundColor:'#ffffff',show:false,webPreferences:{preload:path.join(__dirname,'preload.cjs'),nodeIntegration:false,contextIsolation:true,sandbox:true,backgroundThrottling:false}});
+  win=new BrowserWindow({width:1280,height:860,minWidth:760,minHeight:600,title:'AI Hub · AI 工作空间',backgroundColor:'#ffffff',show:false,webPreferences:{preload:path.join(__dirname,'preload.cjs'),nodeIntegration:false,contextIsolation:true,sandbox:true,backgroundThrottling:false}});
+  const bundledRoot=app.isPackaged?path.join(process.resourcesPath,'ui'):path.join(__dirname,'resources','ui');
+  const hasBundledUI=fs.existsSync(path.join(bundledRoot,'index.html'));
+  if(hasBundledUI)await require('./bundledUI.cjs').install({session:win.webContents.session,root:bundledRoot,getOrigin:uiOrigin});
   win.removeMenu();
   win.webContents.on('before-input-event',(event,input)=>{if((input.control||input.meta)&&input.shift&&input.key.toLowerCase()==='t'&&input.type==='keyDown'){event.preventDefault();void showAlert({title:'强提醒测试',body:'这是演示，不会改变真实额度或提醒状态。'});}});
   win.on('close',e=>{if(!quitting&&trayReady){e.preventDefault();win.hide();}});
@@ -52,6 +55,34 @@ else {
     return handler(...args);
    });
   }
+  function assertSender(e){
+   if(e.sender!==win.webContents||e.senderFrame!==win.webContents.mainFrame||!allowOrigin(e.senderFrame.url))throw Error('Unauthorized sender');
+  }
+  ipcMain.handle('bridge-status',e=>{assertSender(e);return runtime.bridgeStatus();});
+  ipcMain.handle('bridge-control',async(e,action)=>{
+   assertSender(e);
+   if(action==='pause')return runtime.pauseBridge();
+   if(action==='resume')return runtime.resumeBridge();
+   throw Error('无效的采集器控制指令');
+  });
+  ipcMain.handle('desktop-scan-roots',e=>{assertSender(e);return runtime.scanRoots();});
+  ipcMain.handle('desktop-scan-pick',async e=>{
+   assertSender(e);
+   const current=runtime.scanRoots().roots;
+   const pick=await dialog.showOpenDialog(win,{title:'选择授权扫描目录',buttonLabel:'授权此目录',properties:['openDirectory','multiSelections']});
+   if(pick.canceled||!pick.filePaths.length)return {roots:current};
+   return runtime.addScanRoots(pick.filePaths);
+  });
+  ipcMain.handle('desktop-scan-remove',(e,root)=>{assertSender(e);return runtime.removeScanRoot(root);});
+  ipcMain.handle('desktop-scan-run',e=>{assertSender(e);return runtime.runScanRoots();});
+  ipcMain.handle('desktop-tool',async(e,input)=>{
+   assertSender(e);
+   if(!input||typeof input!=='object'||!['conversation','config'].includes(input.action))throw Error('无效的桌面工具请求');
+   const data=Buffer.isBuffer(input.data)?input.data:Buffer.from(input.data||[]);
+   if(data.length===0||data.length>32*1024*1024)throw Error('文件为空或超过 32 MiB');
+   return runtime.runDesktopTool({action:input.action,name:String(input.name||'').slice(0,255),platform:String(input.platform||'').slice(0,60),kind:String(input.kind||'').slice(0,60),data:data.toString('base64')});
+  });
+  ipcMain.handle('desktop-diagnostics',e=>{assertSender(e);return runtime.diagnostics();});
   async function showAlert(value){
    return 'silent'; // Quota reminders are delivered by the primary phone.
   }
@@ -69,6 +100,10 @@ else {
    if(e.sender!==win.webContents||e.senderFrame!==win.webContents.mainFrame||!allowOrigin(e.senderFrame.url))throw Error('Unauthorized sender');
    return runtime.extensionPairCode();
   });
+  ipcMain.on('desktop-info',e=>{
+   if(e.sender!==win.webContents||e.senderFrame!==win.webContents.mainFrame||!allowOrigin(e.senderFrame.url))return;
+   e.returnValue={version:app.getVersion(),bundledUI:hasBundledUI,platform:process.platform};
+  });
   async function askMode(force=false){
    const pref=runtime.readModePreference();
    if(!force&&pref?.remember&&pref.mode){runtime.setUserMode(pref.mode);return pref.mode;}
@@ -83,6 +118,7 @@ else {
   async function openApp(){
    const config=runtime.loadConfig(runtime.dataDir());
    const origin=uiOrigin();
+   if(hasBundledUI)await win.webContents.session.clearStorageData({origin,storages:['serviceworkers','cachestorage']});
    // Network adapters and proxies may still be starting after Windows login.
    // Keep the saved server and session while retrying transient navigation errors.
    for(let attempt=0;;attempt++){
@@ -92,8 +128,8 @@ else {
      await new Promise(resolve=>setTimeout(resolve,1000*2**attempt));
     }
    }
-   await runtime.syncBridgeFromSession(win.webContents,config);
    win.show();
+   void runtime.syncBridgeFromSession(win.webContents,config).catch(()=>{});
   }
   async function handleCloudFailure(err){
    const hint=runtime.startupMessage()||err?.message||String(err||'连接失败');

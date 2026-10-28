@@ -7,6 +7,7 @@ const path=require('node:path');
 const platform=require('./platform.cjs');
 const credentialStore=require('./credentialStore.cjs');
 const localData=require('./localData.cjs');
+const desktopBridge=require('./desktopBridge.cjs');
 const secretCache=new Map();
 
 const LOCAL_ORIGIN='http://127.0.0.1:8080';
@@ -202,6 +203,7 @@ function ensureBridgeConfig(dir,config){
 async function ensureBridge(dir,config){
  ensureBridgeConfig(dir,config);
  const cfgPath=path.join(dir,'bridge.json');
+ if(desktopBridge.isPaused(dir))return;
  let cfg=readJson(cfgPath);
  if(cfg&&cfg.cursor_enabled!==true){cfg.cursor_enabled=true;fs.writeFileSync(cfgPath,JSON.stringify(cfg,null,2),{mode:0o600});}
  if(!bridgeReady(cfg))return;
@@ -412,7 +414,108 @@ function syncLocalData(profileId){
   return localStatus(profileId);
  })().finally(()=>localSyncs.delete(dir));localSyncs.set(dir,task);return task;
 }
+// Desktop collector status, control and bounded local tooling (plan phase 2).
+// Everything below stays local: the desktop tool never opens a network port
+// and scan results only contain file metadata plus secret key NAMES.
+function bridgeAlive(dir){
+ const child=managed.bridge;
+ if(child&&!child.killed)return {running:true,pid:child.pid};
+ const saved=readJson(path.join(dir,'bridge-process.json'));
+ if(Number.isInteger(saved?.Id)){
+  try{process.kill(saved.Id,0);return {running:true,pid:saved.Id};}catch{}
+ }
+ return {running:false,pid:null};
+}
+function bridgeStatus(){
+ const dir=ensureDataDir();
+ const {running,pid}=bridgeAlive(dir);
+ const cfg=readJson(path.join(dir,'bridge.json'));
+ const store=cfg?.local_store&&fs.existsSync(cfg.local_store)?cfg.local_store:null;
+ const observed=file=>store?localData.read(path.join(store,file))?.observed_at||null:null;
+ const bridgeLog=path.join(dir,path.basename(binPath('bridge'))+'.log');
+ const bridgeErr=path.join(dir,path.basename(binPath('bridge'))+'-error.log');
+ return {
+  running,paused:desktopBridge.isPaused(dir),pid,
+  binary_present:fs.existsSync(binPath('bridge')),
+  configured:!!(cfg&&cfg.server&&readSecret('bridge-token')),
+  server:cfg?.server||null,
+  interval_seconds:cfg?.interval_seconds||null,
+  codex_observed_at:observed('codex-latest.json'),
+  cursor_observed_at:observed('cursor-latest.json'),
+  log_tail:desktopBridge.lastLogLine(bridgeLog)||desktopBridge.lastLogLine(bridgeErr),
+  last_error:lastError||null,
+ };
+}
+function pauseBridge(){
+ desktopBridge.setPaused(ensureDataDir(),true);
+ stopBridge();
+ return bridgeStatus();
+}
+async function resumeBridge(){
+ desktopBridge.setPaused(ensureDataDir(),false);
+ await ensureBridge(ensureDataDir(),loadConfig(ensureDataDir()));
+ return bridgeStatus();
+}
+function scanRoots(){
+ return {roots:desktopBridge.readScanRoots(ensureDataDir())};
+}
+function addScanRoots(inputs){
+ const dir=ensureDataDir();
+ const added=desktopBridge.normalizeRoots(inputs);
+ for(const root of added){
+  let stat=null;try{stat=fs.statSync(root);}catch{}
+  if(!stat||!stat.isDirectory())throw Error('授权目录不存在或不是文件夹：'+root);
+ }
+ return desktopBridge.addScanRoots(dir,added);
+}
+function removeScanRoot(root){return desktopBridge.removeScanRoot(ensureDataDir(),root);}
+// The desktop tool runs the bundled bridge binary as a bounded stdin/stdout
+// parser: no network, no credentials, no arbitrary arguments.
+function runDesktopTool(input){
+ const exe=binPath('bridge');
+ if(!fs.existsSync(exe))return Promise.reject(new Error('缺少内置桌面工具程序，请重新安装'));
+ return new Promise((resolve,reject)=>{
+  const child=spawn(exe,['--desktop-tool'],{cwd:path.dirname(exe),env:{...process.env},stdio:['pipe','pipe','pipe'],windowsHide:true});
+  let out='',err='',done=false;
+  const finish=fn=>{if(done)return;done=true;clearTimeout(timer);fn();};
+  const timer=setTimeout(()=>finish(()=>{child.kill();reject(new Error('桌面工具超时'));}),60000);
+  let outputBytes=0;
+  child.stdout.setEncoding('utf8');
+  child.stdout.on('data',d=>{outputBytes+=Buffer.byteLength(d);if(outputBytes>48*1024*1024){finish(()=>{child.kill();reject(new Error('桌面工具输出超过限制'));});return;}out+=d;});
+  child.stderr.on('data',d=>{err=(err+d).slice(-65536);});
+  child.on('error',e=>finish(()=>reject(new Error('桌面工具无法启动：'+e.message))));
+  child.on('close',code=>finish(()=>{
+   if(code!==0)return reject(new Error((err.trim().split(/\r?\n/).pop()||'桌面工具运行失败').slice(0,300)));
+   try{resolve(JSON.parse(out));}catch{reject(new Error('桌面工具输出无效'));}
+  }));
+  child.stdin.on('error',()=>{});
+  child.stdin.end(JSON.stringify(input));
+ });
+}
+function runScanRoots(){
+ const roots=desktopBridge.readScanRoots(ensureDataDir());
+ if(!roots.length)throw Error('请先添加授权目录');
+ if(!roots.every(root=>fs.existsSync(root)))throw Error('授权目录已不存在，请重新选择');
+ return runDesktopTool({action:'scan',roots});
+}
+async function diagnostics(){
+ const dir=ensureDataDir(),config=loadConfig(dir);
+ const cloud=await probeCloud(getUiOrigin()).catch(()=>false);
+ return {
+  generated_at:new Date().toISOString(),
+  version:app.getVersion(),
+  platform:process.platform,
+  electron:process.versions.electron,
+  mode:getActiveMode(config),
+  ui_origin:getUiOrigin(),
+  cloud_ready:cloud,
+  data_dir:dir,
+  bridge:bridgeStatus(),
+  scan_roots:desktopBridge.readScanRoots(dir),
+  startup_message:startupMessage()||null,
+ };
+}
 module.exports.localRequest=localRequest;
 module.exports.localStatus=localStatus;
 module.exports.syncLocalData=syncLocalData;
-module.exports={refreshSessionForSync,localRequest,localStatus,syncLocalData,ensureReady,stopManaged,stopBridge,startupMessage,getUiOrigin,getActiveMode,setUserMode,setCloudServer,installationID,extensionPairCode,forceLocalMode,resetMode,clearModePreference,readModePreference,probeCloud,loadConfig,dataDir,readDesktopSession,writeDesktopSession,syncBridgeFromSession,LOCAL_ORIGIN,ORIGIN:LOCAL_ORIGIN,DEFAULT_CLOUD};
+module.exports={refreshSessionForSync,localRequest,localStatus,syncLocalData,ensureReady,stopManaged,stopBridge,startupMessage,getUiOrigin,getActiveMode,setUserMode,setCloudServer,installationID,extensionPairCode,forceLocalMode,resetMode,clearModePreference,readModePreference,probeCloud,loadConfig,dataDir,readDesktopSession,writeDesktopSession,syncBridgeFromSession,bridgeStatus,pauseBridge,resumeBridge,scanRoots,addScanRoots,removeScanRoot,runScanRoots,runDesktopTool,diagnostics,LOCAL_ORIGIN,ORIGIN:LOCAL_ORIGIN,DEFAULT_CLOUD};

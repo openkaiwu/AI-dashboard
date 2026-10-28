@@ -29,7 +29,8 @@ class HubBrand extends StatelessWidget {
             Text(subtitle,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: const TextStyle(fontSize: 10, color: HubTheme.muted)),
+                style: TextStyle(
+                    fontSize: 10, color: HubTheme.colors(context).muted)),
           ]),
         ),
       ]);
@@ -43,8 +44,9 @@ class HubNavigationBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => DecoratedBox(
-        decoration: const BoxDecoration(
-            border: Border(top: BorderSide(color: HubTheme.line))),
+        decoration: BoxDecoration(
+            border:
+                Border(top: BorderSide(color: HubTheme.colors(context).line))),
         child: NavigationBar(
           selectedIndex: selectedIndex,
           onDestinationSelected: onSelected,

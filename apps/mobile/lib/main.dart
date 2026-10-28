@@ -16,6 +16,7 @@ import 'codex_page.dart';
 import 'cursor_page.dart';
 import 'inbox_page.dart';
 import 'theme.dart';
+import 'appearance.dart';
 import 'workspace_chrome.dart';
 import 'manual_account.dart';
 import 'strong_reminder_ui.dart';
@@ -23,21 +24,26 @@ import 'reminder_policy.dart';
 import 'background_sync.dart';
 import 'foreground_reminder_poller.dart';
 
-void main() {
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   unawaited(LocalNotifications.init());
+  await appearance.load();
   runApp(const HubApp());
 }
 
 class HubApp extends StatelessWidget {
   const HubApp({super.key});
   @override
-  Widget build(BuildContext context) => MaterialApp(
-        title: 'AI Hub',
-        debugShowCheckedModeBanner: false,
-        theme: HubTheme.light(),
-        home: const HubHome(),
-      );
+  Widget build(BuildContext context) => ListenableBuilder(
+      listenable: appearance,
+      builder: (context, _) => MaterialApp(
+            title: 'AI Hub',
+            debugShowCheckedModeBanner: false,
+            theme: HubTheme.light(),
+            darkTheme: HubTheme.dark(),
+            themeMode: appearance.mode,
+            home: const HubHome(),
+          ));
 }
 
 class HubHome extends StatefulWidget {
@@ -80,7 +86,12 @@ class _HubHomeState extends State<HubHome> with WidgetsBindingObserver {
     LocalNotifications.onAction = handleReminderAction;
     reminderPoller = ForegroundReminderPoller(
       check: () async {
-        if (api?.session != null) await pollStrongNotifications();
+        if (api?.session != null) {
+          await pollStrongNotifications();
+          if (mounted && error?.startsWith('提醒检查失败，将自动重试：') == true) {
+            setState(() => error = null);
+          }
+        }
       },
       onError: (e) {
         if (mounted) setState(() => error = '提醒检查失败，将自动重试：$e');
@@ -532,7 +543,8 @@ class _HubHomeState extends State<HubHome> with WidgetsBindingObserver {
                                 const InputDecoration(labelText: 'HTTPS 根地址')),
                         if (dialogError != null)
                           Text(dialogError!,
-                              style: const TextStyle(color: HubTheme.warn)),
+                              style: TextStyle(
+                                  color: HubTheme.colors(context).warn)),
                         const Padding(
                             padding: EdgeInsets.only(top: 16),
                             child: Text('电脑和手机填写同一地址。公网连接必须使用 HTTPS。')),
@@ -692,7 +704,7 @@ class _HubHomeState extends State<HubHome> with WidgetsBindingObserver {
       const SizedBox(height: 16),
       for (final c in state.conflicts)
         Card(
-            color: const Color(0xfffff7e8),
+            color: HubTheme.colors(context).warnSurface,
             child: Padding(
                 padding: const EdgeInsets.all(16),
                 child: Column(
@@ -900,17 +912,17 @@ class _HubHomeState extends State<HubHome> with WidgetsBindingObserver {
         Container(
           padding: const EdgeInsets.all(22),
           decoration: BoxDecoration(
-            color: HubTheme.bg2,
+            color: HubTheme.colors(context).bg2,
             borderRadius: BorderRadius.circular(18),
-            border: Border.all(color: HubTheme.line),
+            border: Border.all(color: HubTheme.colors(context).line),
           ),
           child:
               Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            const Text('AI HUB / YOUR PERSONAL CONTROL ROOM',
+            Text('AI HUB / YOUR PERSONAL CONTROL ROOM',
                 style: TextStyle(
                     fontSize: 11,
                     letterSpacing: 1.1,
-                    color: HubTheme.muted,
+                    color: HubTheme.colors(context).muted,
                     fontWeight: FontWeight.w600)),
             const SizedBox(height: 16),
             Text('连接你的工作空间', style: Theme.of(context).textTheme.headlineSmall),
@@ -1079,6 +1091,7 @@ class _HubHomeState extends State<HubHome> with WidgetsBindingObserver {
                       ? 'Codex 工作空间'
                       : '选择工作模式'),
           actions: [
+            const AppearanceMenu(),
             if (engine != null && tab == 0 && uiMode != 'choose')
               IconButton(
                 tooltip: '手工登记额度',
@@ -1101,7 +1114,7 @@ class _HubHomeState extends State<HubHome> with WidgetsBindingObserver {
                     padding:
                         const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
                     decoration: BoxDecoration(
-                        color: HubTheme.bg2,
+                        color: HubTheme.colors(context).bg2,
                         borderRadius: BorderRadius.circular(9)),
                     child: Row(mainAxisSize: MainAxisSize.min, children: [
                       Text(
@@ -1129,7 +1142,7 @@ class _HubHomeState extends State<HubHome> with WidgetsBindingObserver {
                 if (error != null)
                   Container(
                     width: double.infinity,
-                    color: const Color(0xfffff7e8),
+                    color: HubTheme.colors(context).warnSurface,
                     padding: const EdgeInsets.all(14),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,

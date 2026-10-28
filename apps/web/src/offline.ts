@@ -3,6 +3,7 @@ let status:OfflineStatus="preparing";
 export function offlineStatus(){return status;}
 function publish(value:OfflineStatus){status=value;dispatchEvent(new Event("hub-offline"));}
 export async function prepareOffline(){
+ if(window.aihubDesktop?.info?.().bundledUI){publish("ready");return;}
  if(!import.meta.env.PROD || !("serviceWorker" in navigator)){publish("unavailable");return;}
  try{
   if(await caches.match(location.origin+"/"))publish("ready");

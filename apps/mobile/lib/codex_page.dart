@@ -237,10 +237,10 @@ class _CodexPageState extends State<CodexPage>
   Widget eyebrow(String text) => Padding(
         padding: const EdgeInsets.only(bottom: 8),
         child: Text(text.toUpperCase(),
-            style: const TextStyle(
+            style: TextStyle(
                 fontSize: 11,
                 letterSpacing: 1.2,
-                color: HubTheme.muted,
+                color: HubTheme.colors(context).muted,
                 fontWeight: FontWeight.w600)),
       );
 
@@ -268,15 +268,15 @@ class _CodexPageState extends State<CodexPage>
       'unknown': '额度窗口信息尚不完整，不推算可用余量。',
     };
     final color = state == 'slow'
-        ? const Color(0xfffff5e5)
+        ? HubTheme.colors(context).warnSurface
         : state == 'stale'
-            ? HubTheme.bg2
-            : HubTheme.accentDim;
+            ? HubTheme.colors(context).bg2
+            : HubTheme.colors(context).accentDim;
     final border = state == 'slow'
-        ? const Color(0xffead7b4)
+        ? HubTheme.colors(context).line
         : state == 'stale'
-            ? HubTheme.line
-            : const Color(0xffdce6ff);
+            ? HubTheme.colors(context).line
+            : HubTheme.colors(context).line;
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(18),
@@ -289,13 +289,17 @@ class _CodexPageState extends State<CodexPage>
         Row(children: [
           Icon(Icons.verified_user_outlined,
               size: 15,
-              color: state == 'slow' ? HubTheme.warn : HubTheme.accent),
+              color: state == 'slow'
+                  ? HubTheme.colors(context).warn
+                  : HubTheme.colors(context).accent),
           const SizedBox(width: 7),
           Text('现在的建议 · ${labels[state] ?? state}',
               style: TextStyle(
                   fontSize: 11,
                   fontWeight: FontWeight.w600,
-                  color: state == 'slow' ? HubTheme.warn : HubTheme.accent)),
+                  color: state == 'slow'
+                      ? HubTheme.colors(context).warn
+                      : HubTheme.colors(context).accent)),
         ]),
         const SizedBox(height: 10),
         Text(top.isNotEmpty ? top.first['title'] : labels[state],
@@ -324,31 +328,33 @@ class _CodexPageState extends State<CodexPage>
           ]),
           const SizedBox(height: 18),
           Text(ReminderPolicy.remainingLabel(remaining),
-              style: const TextStyle(
+              style: TextStyle(
                   fontSize: 48,
                   fontWeight: FontWeight.w600,
                   height: 1,
                   letterSpacing: -2,
-                  color: HubTheme.ink)),
-          const Text('% 剩余', style: TextStyle(color: HubTheme.muted)),
+                  color: HubTheme.colors(context).ink)),
+          Text('% 剩余', style: TextStyle(color: HubTheme.colors(context).muted)),
           const SizedBox(height: 14),
           ClipRRect(
             borderRadius: BorderRadius.circular(99),
             child: LinearProgressIndicator(
               value: remaining / 100,
               minHeight: 6,
-              backgroundColor: HubTheme.line,
-              color: HubTheme.accent,
+              backgroundColor: HubTheme.colors(context).line,
+              color: HubTheme.colors(context).accent,
             ),
           ),
           const SizedBox(height: 14),
           Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-            const Text('距离重置', style: TextStyle(color: HubTheme.muted)),
+            Text('距离重置',
+                style: TextStyle(color: HubTheme.colors(context).muted)),
             Text(hours(m['hours_left'] as num?)),
           ]),
           const SizedBox(height: 8),
           Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-            const Text('均匀使用预算', style: TextStyle(color: HubTheme.muted)),
+            Text('均匀使用预算',
+                style: TextStyle(color: HubTheme.colors(context).muted)),
             Text(m['daily_budget'] == null
                 ? '暂不可估'
                 : '${(m['daily_budget'] as num).toStringAsFixed(1)}% / 天'),
@@ -370,19 +376,20 @@ class _CodexPageState extends State<CodexPage>
       child: Padding(
         padding: const EdgeInsets.all(20),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          const Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text('备用重置卡', style: TextStyle(color: HubTheme.muted)),
-                Icon(Icons.confirmation_number_outlined,
-                    size: 20, color: HubTheme.accent),
-              ]),
+          Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+            Text('备用重置卡',
+                style: TextStyle(color: HubTheme.colors(context).muted)),
+            Icon(Icons.confirmation_number_outlined,
+                size: 20, color: HubTheme.colors(context).accent),
+          ]),
           const SizedBox(height: 16),
           Text(credits == null ? '—' : '${credits['available_count']}',
-              style: const TextStyle(
-                  fontSize: 48, color: HubTheme.accent, height: 1)),
+              style: TextStyle(
+                  fontSize: 48,
+                  color: HubTheme.colors(context).accent,
+                  height: 1)),
           Text(credits == null ? '状态未知' : '张可用',
-              style: const TextStyle(color: HubTheme.muted)),
+              style: TextStyle(color: HubTheme.colors(context).muted)),
           const SizedBox(height: 12),
           if (credits == null)
             const Text('Codex 尚未返回重置卡信息。')
@@ -416,7 +423,8 @@ class _CodexPageState extends State<CodexPage>
         child: Padding(
           padding: const EdgeInsets.all(28),
           child: Column(children: [
-            const Icon(Icons.link_off, size: 42, color: HubTheme.accent),
+            Icon(Icons.link_off,
+                size: 42, color: HubTheme.colors(context).accent),
             const SizedBox(height: 16),
             Text('先连接电脑上的 Codex',
                 style: Theme.of(context).textTheme.titleMedium),
@@ -610,8 +618,8 @@ class _CodexPageState extends State<CodexPage>
       Text(status,
           style: TextStyle(
               color: expired || news?['status'] != 'checked'
-                  ? HubTheme.warn
-                  : HubTheme.accent)),
+                  ? HubTheme.colors(context).warn
+                  : HubTheme.colors(context).accent)),
       Text(news == null ? '等待电脑同步检查结果' : '上次尝试 ${when(news['checked_at'])}'),
       if (news?['last_success_at'] != null)
         Text('最近成功 ${when(news!['last_success_at'])}'),
@@ -658,10 +666,11 @@ class _CodexPageState extends State<CodexPage>
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
           decoration: BoxDecoration(
-              color: HubTheme.accentDim,
+              color: HubTheme.colors(context).accentDim,
               borderRadius: BorderRadius.circular(6)),
           child: Text('$pending 条提醒',
-              style: const TextStyle(fontSize: 11, color: HubTheme.accent)),
+              style: TextStyle(
+                  fontSize: 11, color: HubTheme.colors(context).accent)),
         ),
       ]),
       const SizedBox(height: 8),
@@ -818,14 +827,17 @@ class _CodexPageState extends State<CodexPage>
             '查看消耗趋势，了解你的使用节奏。',
             '管理提醒规则与这台手机的通知。'
           ][tabs.index],
-          style: const TextStyle(color: HubTheme.muted, fontSize: 12)),
+          style:
+              TextStyle(color: HubTheme.colors(context).muted, fontSize: 12)),
       const SizedBox(height: 8),
       Row(children: [
         Container(
           width: 8,
           height: 8,
           decoration: BoxDecoration(
-            color: isStale ? HubTheme.warn : HubTheme.accent,
+            color: isStale
+                ? HubTheme.colors(context).warn
+                : HubTheme.colors(context).accent,
             shape: BoxShape.circle,
           ),
         ),
@@ -863,12 +875,14 @@ class _CodexPageState extends State<CodexPage>
       ]),
       Text(
           '数据截至 ${formatLocalTimestamp(d?['snapshot']?['observed_at'], empty: '采集时间未知')}',
-          style: const TextStyle(color: HubTheme.muted, fontSize: 11)),
+          style:
+              TextStyle(color: HubTheme.colors(context).muted, fontSize: 11)),
       if (error != null || cacheWarning != null)
         Padding(
           padding: const EdgeInsets.only(top: 8),
           child: Text(error ?? cacheWarning!,
-              style: const TextStyle(color: HubTheme.warn, fontSize: 12)),
+              style: TextStyle(
+                  color: HubTheme.colors(context).warn, fontSize: 12)),
         ),
       if (overview?['plan']?['plan_type'] == 'unknown')
         const Text('Codex 套餐尚未确认，请在提醒设置中选择套餐。'),
@@ -876,9 +890,9 @@ class _CodexPageState extends State<CodexPage>
       TabBar(
         controller: tabs,
         isScrollable: true,
-        labelColor: HubTheme.accent,
-        unselectedLabelColor: HubTheme.muted,
-        indicatorColor: HubTheme.accent,
+        labelColor: HubTheme.colors(context).accent,
+        unselectedLabelColor: HubTheme.colors(context).muted,
+        indicatorColor: HubTheme.colors(context).accent,
         tabs: const [
           Tab(text: '额度总览'),
           Tab(text: '使用计划'),

@@ -123,7 +123,8 @@ class _InboxPageState extends State<InboxPage> {
           const Text('同一提醒在条件解除前不会重复轰炸。点击可切换对应模式。'),
           if (error != null) ...[
             const SizedBox(height: 12),
-            Text(error!, style: const TextStyle(color: HubTheme.warn)),
+            Text(error!,
+                style: TextStyle(color: HubTheme.colors(context).warn)),
           ],
           const SizedBox(height: 20),
           if (items.isEmpty)
@@ -164,7 +165,8 @@ class _InboxPageState extends State<InboxPage> {
                               : n['status'] == 'dismissed'
                                   ? '已忽略'
                                   : '已读',
-                          style: const TextStyle(color: HubTheme.muted)),
+                          style:
+                              TextStyle(color: HubTheme.colors(context).muted)),
                   onTap: () {
                     final slug = n['provider_slug'] as String?;
                     if (slug == 'cursor' || slug == 'codex') {

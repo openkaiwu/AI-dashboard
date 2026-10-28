@@ -193,7 +193,7 @@ class _ConsumptionPanelState extends State<ConsumptionPanel> {
         padding: const EdgeInsets.symmetric(vertical: 26, horizontal: 8),
         child: Column(children: [
           Icon(failed ? Icons.cloud_off_outlined : Icons.bar_chart_rounded,
-              size: 34, color: HubTheme.muted),
+              size: 34, color: HubTheme.colors(context).muted),
           const SizedBox(height: 14),
           Text(failed ? '暂时无法获取消耗数据' : '这段时间还没有消耗样本',
               textAlign: TextAlign.center,
@@ -201,7 +201,8 @@ class _ConsumptionPanelState extends State<ConsumptionPanel> {
           const SizedBox(height: 10),
           Text(failed ? '请检查服务器连接后重试，当前无法判断消耗量。' : '电脑在线并完成采集后，这里会显示趋势。',
               textAlign: TextAlign.center,
-              style: const TextStyle(color: HubTheme.muted, fontSize: 12)),
+              style: TextStyle(
+                  color: HubTheme.colors(context).muted, fontSize: 12)),
           const SizedBox(height: 16),
           Wrap(
               spacing: 8,
@@ -242,10 +243,11 @@ class _ConsumptionPanelState extends State<ConsumptionPanel> {
             padding: const EdgeInsets.all(16),
             child:
                 Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              const Row(children: [
-                Icon(Icons.schedule, size: 16, color: HubTheme.accent),
-                SizedBox(width: 7),
-                Text('5 小时窗口 · Plus')
+              Row(children: [
+                Icon(Icons.schedule,
+                    size: 16, color: HubTheme.colors(context).accent),
+                const SizedBox(width: 7),
+                const Text('5 小时窗口 · Plus')
               ]),
               const SizedBox(height: 10),
               Text(
@@ -264,7 +266,8 @@ class _ConsumptionPanelState extends State<ConsumptionPanel> {
                               : pending.contains('five')
                                   ? '正在读取额度…'
                                   : '暂无窗口样本',
-                  style: const TextStyle(color: HubTheme.muted, fontSize: 11)),
+                  style: TextStyle(
+                      color: HubTheme.colors(context).muted, fontSize: 11)),
             ])));
   }
 
@@ -324,14 +327,14 @@ class _ConsumptionPanelState extends State<ConsumptionPanel> {
                       padding: const EdgeInsets.symmetric(horizontal: 3),
                       child: Material(
                           color: range == value
-                              ? const Color(0xffedf2ff)
-                              : Colors.white,
+                              ? HubTheme.colors(context).accentDim
+                              : HubTheme.colors(context).surface,
                           shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(12),
                               side: BorderSide(
                                   color: range == value
-                                      ? const Color(0xff9eb6f5)
-                                      : HubTheme.line)),
+                                      ? HubTheme.colors(context).accent
+                                      : HubTheme.colors(context).line)),
                           child: InkWell(
                               borderRadius: BorderRadius.circular(12),
                               onTap: () => setState(() {
@@ -346,9 +349,10 @@ class _ConsumptionPanelState extends State<ConsumptionPanel> {
                                           CrossAxisAlignment.start,
                                       children: [
                                         Text(label(value),
-                                            style: const TextStyle(
+                                            style: TextStyle(
                                                 fontSize: 11,
-                                                color: HubTheme.muted)),
+                                                color: HubTheme.colors(context)
+                                                    .muted)),
                                         const SizedBox(height: 10),
                                         Text(
                                             pending.contains(keyFor(value)) &&
@@ -359,10 +363,11 @@ class _ConsumptionPanelState extends State<ConsumptionPanel> {
                                                             pointsFor(value))
                                                         ?.toStringAsFixed(1) ??
                                                     '—',
-                                            style: const TextStyle(
+                                            style: TextStyle(
                                                 fontSize: 24,
                                                 fontWeight: FontWeight.w600,
-                                                color: HubTheme.ink)),
+                                                color: HubTheme.colors(context)
+                                                    .ink)),
                                         const SizedBox(height: 5),
                                         Text(
                                             errors.contains(keyFor(value))
@@ -375,17 +380,19 @@ class _ConsumptionPanelState extends State<ConsumptionPanel> {
                                                         null
                                                     ? '等待样本'
                                                     : '个百分点',
-                                            style: const TextStyle(
+                                            style: TextStyle(
                                                 fontSize: 10,
-                                                color: HubTheme.muted)),
+                                                color: HubTheme.colors(context)
+                                                    .muted)),
                                       ]))))))
           ],
         ),
         if (errors.isNotEmpty)
-          const Padding(
-              padding: EdgeInsets.only(top: 12),
+          Padding(
+              padding: const EdgeInsets.only(top: 12),
               child: Text('部分数据更新失败；保留已有数据，缺失数据以“—”显示。',
-                  style: TextStyle(fontSize: 12, color: HubTheme.warn))),
+                  style: TextStyle(
+                      fontSize: 12, color: HubTheme.colors(context).warn))),
         const SizedBox(height: 14),
         Card(
             child: Padding(
@@ -398,8 +405,9 @@ class _ConsumptionPanelState extends State<ConsumptionPanel> {
                       const SizedBox(height: 6),
                       Text(
                           '${basis == '300' ? '5 小时额度' : '周额度'} · ${label(range)}${range == 1 ? '' : '（含今天）'}',
-                          style: const TextStyle(
-                              fontSize: 11, color: HubTheme.muted)),
+                          style: TextStyle(
+                              fontSize: 11,
+                              color: HubTheme.colors(context).muted)),
                       const SizedBox(height: 18),
                       if (loading)
                         const Padding(
@@ -415,9 +423,10 @@ class _ConsumptionPanelState extends State<ConsumptionPanel> {
                       else if (total == null)
                         placeholder(false)
                       else ...[
-                        const Text('单位：百分点（pp） · 灰线表示无样本',
-                            style:
-                                TextStyle(fontSize: 10, color: HubTheme.muted)),
+                        Text('单位：百分点（pp） · 灰线表示无样本',
+                            style: TextStyle(
+                                fontSize: 10,
+                                color: HubTheme.colors(context).muted)),
                         const SizedBox(height: 12),
                         SizedBox(
                             height: 160,
@@ -469,11 +478,13 @@ class _ConsumptionPanelState extends State<ConsumptionPanel> {
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
                               Text(points.first.label,
-                                  style: const TextStyle(
-                                      fontSize: 10, color: HubTheme.muted)),
+                                  style: TextStyle(
+                                      fontSize: 10,
+                                      color: HubTheme.colors(context).muted)),
                               Text(points.last.label,
-                                  style: const TextStyle(
-                                      fontSize: 10, color: HubTheme.muted))
+                                  style: TextStyle(
+                                      fontSize: 10,
+                                      color: HubTheme.colors(context).muted))
                             ]),
                         const SizedBox(height: 14),
                         Text(
@@ -484,24 +495,27 @@ class _ConsumptionPanelState extends State<ConsumptionPanel> {
                             '已记录 ${total.toStringAsFixed(1)} pp · $known/${points.length} ${range == 1 ? '小时' : '天'}有样本',
                             style: const TextStyle(fontSize: 12)),
                         if (known < points.length)
-                          const Padding(
-                              padding: EdgeInsets.only(top: 8),
+                          Padding(
+                              padding: const EdgeInsets.only(top: 8),
                               child: Text('存在采集空档，合计仅包含已记录部分。',
                                   style: TextStyle(
-                                      fontSize: 11, color: HubTheme.muted))),
+                                      fontSize: 11,
+                                      color: HubTheme.colors(context).muted))),
                       ],
                       if (data[selectedKey] != null)
                         Padding(
                             padding: const EdgeInsets.only(top: 15),
                             child: Text(
                                 '${errors.contains(selectedKey) ? '刷新失败，保留上次数据 · ' : ''}${consumptionFreshness(data[selectedKey]!)}',
-                                style: const TextStyle(
-                                    fontSize: 10, color: HubTheme.muted))),
+                                style: TextStyle(
+                                    fontSize: 10,
+                                    color: HubTheme.colors(context).muted))),
                     ]))),
       ],
       const SizedBox(height: 12),
-      const Text('1 个百分点 = 本窗口完整额度的 1%。重置不算消耗，空档不代表零消耗。',
-          style: TextStyle(fontSize: 11, color: HubTheme.muted)),
+      Text('1 个百分点 = 本窗口完整额度的 1%。重置不算消耗，空档不代表零消耗。',
+          style:
+              TextStyle(fontSize: 11, color: HubTheme.colors(context).muted)),
       const SizedBox(height: 20),
     ]);
   }

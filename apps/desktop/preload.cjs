@@ -1,5 +1,6 @@
 const {contextBridge,ipcRenderer}=require('electron');
 contextBridge.exposeInMainWorld('aihubDesktop',Object.freeze({
+ info:()=>ipcRenderer.sendSync('desktop-info'),
  alert:(value)=>ipcRenderer.invoke('quota-alert',value),
  localRequest:(profileId,path,method,body)=>ipcRenderer.invoke('local-data-request',profileId,path,method,body),
  localStatus:(profileId,patch)=>ipcRenderer.invoke('local-data-status',profileId,patch),
@@ -9,5 +10,13 @@ contextBridge.exposeInMainWorld('aihubDesktop',Object.freeze({
  installationID:(previous)=>ipcRenderer.sendSync('installation-id',previous),
  sessionSet:(id,value)=>ipcRenderer.sendSync('session-set',id,value),
  configureServer:(url)=>ipcRenderer.invoke('configure-server',url),
- extensionPairCode:()=>ipcRenderer.invoke('extension-pair-code')
+ extensionPairCode:()=>ipcRenderer.invoke('extension-pair-code'),
+ bridgeStatus:()=>ipcRenderer.invoke('bridge-status'),
+ bridgeControl:(action)=>ipcRenderer.invoke('bridge-control',action),
+ scanRoots:()=>ipcRenderer.invoke('desktop-scan-roots'),
+ scanPick:()=>ipcRenderer.invoke('desktop-scan-pick'),
+ scanRemove:(root)=>ipcRenderer.invoke('desktop-scan-remove',root),
+ scanRun:()=>ipcRenderer.invoke('desktop-scan-run'),
+ desktopTool:(input)=>ipcRenderer.invoke('desktop-tool',input),
+ diagnostics:()=>ipcRenderer.invoke('desktop-diagnostics')
 }));

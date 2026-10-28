@@ -15,10 +15,10 @@ import (
 )
 
 const (
-	scanMaxFiles      = 500
-	scanMaxDepth      = 3
-	scanMaxFileBytes  = 256 * 1024
-	scanMaxEntries    = 100
+	scanMaxFiles     = 500
+	scanMaxDepth     = 3
+	scanMaxFileBytes = 256 * 1024
+	scanMaxEntries   = 100
 )
 
 type knownFile struct {
@@ -47,6 +47,10 @@ var scanSkipDirs = map[string]bool{".git": true, "node_modules": true, "__pycach
 func collectConfigScan(roots []string) []cfgpkg.ScanEntry {
 	entries := []cfgpkg.ScanEntry{}
 	for _, root := range roots {
+		rootLink, e := os.Lstat(root)
+		if e != nil || rootLink.Mode()&os.ModeSymlink != 0 {
+			continue
+		}
 		info, e := os.Stat(root)
 		if e != nil || !info.IsDir() {
 			continue
@@ -55,6 +59,20 @@ func collectConfigScan(roots []string) []cfgpkg.ScanEntry {
 		base := filepath.Clean(root)
 		_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 			if err != nil {
+				return nil
+			}
+			if d.Type()&os.ModeSymlink != 0 {
+				return nil
+			}
+			resolved, e := filepath.EvalSymlinks(path)
+			if e != nil {
+				return nil
+			}
+			rel, e := filepath.Rel(base, resolved)
+			if e != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+				if d.IsDir() {
+					return fs.SkipDir
+				}
 				return nil
 			}
 			if count >= scanMaxFiles || len(entries) >= scanMaxEntries {
