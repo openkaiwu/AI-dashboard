@@ -40,6 +40,8 @@ node scripts/run-desktop-render-test.cjs artifacts/desktop/installer/win-unpacke
 - Windows 发布者签名：未配置。
 - 下载页路径：`/downloads/index.html`；稳定 EXE 链接：`/downloads/desktop/AIHub-Setup.exe`。
 
-发布状态：服务器已上架 1.1.12，版本清单和稳定下载链接验证通过；替换前文件保存在 `backups-v1.1.12-20261028T051411Z`。公网完整 EXE 字节校验进行中，完成后补记结果。
+发布状态：服务器已上架 1.1.12，版本清单和稳定下载链接验证通过；替换前文件保存在 `backups-v1.1.12-20261028T051411Z`。2026-10-28 13:18:48（UTC+8），从公网完整下载 115/115 个分段，按顺序计算全文件哈希：119776994 字节及 SHA-256 均与本机已验证的安装包一致，最新校验清单匹配。Android 文件的服务器哈希与既有版本一致，本次未重新下载整个 APK。
+
+实现与回归测试已推送至 `codex/interface-redesign-20261011`：[164cf77](https://github.com/openkaiwu/AI-dashboard/commit/164cf77)。
 
 本次不修改云端服务、数据库、Nginx 或 Android 包；下载页保留时区切换、NetScope 和其他平台入口。Linear 其余待办继续以原实施台账为准。
