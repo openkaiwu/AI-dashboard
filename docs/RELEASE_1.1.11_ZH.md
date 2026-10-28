@@ -22,7 +22,7 @@
 | Windows 安装 | 静默覆盖安装完成；账户、凭据、本地数据、IndexedDB/Local Storage 共 76 个文件哈希不变；安装程序资源与构建一致 |
 | Android 产物 | 包名与签名兼容旧版，版本 1.1.11 / 15，minSdk 24 / targetSdk 36 |
 | 界面证据 | Flutter 浅深色布局渲染；桌面深色预览曾检查。后续浏览器访问被拒绝、安装后窗口检查授权超时，不能声称安装后交互验收完成 |
-| 下载发布 | 服务器发布完成，服务器端全文件 SHA-256、公开页面版本、清单及稳定链接首尾 Range 已验证；完整公网字节校验进行中 |
+| 下载发布 | 服务器发布完成；公开页面、清单和稳定链接验证通过；从公网下载全部 174 个分段并按顺序合并，两个安装包完整字节数与 SHA-256 均匹配（2026-10-28 12:25:35 UTC+8） |
 
 ## 产物
 
@@ -34,6 +34,8 @@
 Windows 尚未配置发布者签名。Android 沿用已有 Android Debug 证书，SHA-256 为 `57023b9580f3f2d6129677f2eb3c7846da8edcbe85f10ea75ea55edd09316a1c`。这些事实不等于正式商店签名验收。
 
 下载页：http://49.232.236.248:8888/downloads/index.html 。Windows 稳定链接 `/downloads/desktop/AIHub-Setup.exe`；Android 稳定链接 `/downloads/aihub-mobile.apk`。服务器已保留更新前的文件，备份目录为 `backups-v1.1.11-20261028T041754Z`。
+
+实现代码已提交并推送到 `codex/interface-redesign-20261011`，提交为 [`04db328`](https://github.com/openkaiwu/AI-dashboard/commit/04db328acd437ea4349239953307b1dfeaf4b436)。公网下载校验覆盖完整文件，未将 HEAD、少量 Range 或服务器本机哈希当作完整下载验收。
 
 ## 边界与待验证项
 
