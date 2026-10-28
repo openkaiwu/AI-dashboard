@@ -8,8 +8,12 @@ try {
         npm ci
         if ($LASTEXITCODE -ne 0) { throw 'npm ci failed' }
     }
+    node (Join-Path $root 'scripts/run-desktop-render-test.cjs')
+    if ($LASTEXITCODE -ne 0) { throw 'Desktop UI did not render in Electron; refusing to package' }
     npm run dist
     if ($LASTEXITCODE -ne 0) { throw 'desktop installer build failed' }
+    node (Join-Path $root 'scripts/run-desktop-render-test.cjs') (Join-Path $root 'artifacts/desktop/installer/win-unpacked')
+    if ($LASTEXITCODE -ne 0) { throw 'Packaged desktop UI did not render in Electron; refusing release metadata' }
     python -X utf8 (Join-Path $root 'scripts/package-desktop-installer.py')
     if ($LASTEXITCODE -ne 0) { throw 'installer metadata failed' }
 } finally { Pop-Location }
