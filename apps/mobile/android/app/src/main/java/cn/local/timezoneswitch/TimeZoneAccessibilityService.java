@@ -318,4 +318,3 @@ public class TimeZoneAccessibilityService extends AccessibilityService {
         getSharedPreferences("state", MODE_PRIVATE).edit().putString("result", text).putBoolean("running", target != null).apply();
     }
 }
-

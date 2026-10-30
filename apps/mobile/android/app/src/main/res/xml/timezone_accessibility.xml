@@ -9,4 +9,3 @@
     android:notificationTimeout="150"
     android:packageNames="com.android.settings"
     android:settingsActivity="dev.aihub.aihub_mobile.MainActivity" />
-
