@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'timezone_page.dart';
 import 'dart:convert';
 import 'dart:io';
 import 'package:drift/native.dart';
@@ -816,6 +817,7 @@ class _HubHomeState extends State<HubHome> with WidgetsBindingObserver {
       ]);
 
   Widget serverPage() => ListView(padding: const EdgeInsets.all(20), children: [
+        Card(child: ListTile(leading: const Icon(Icons.public), title: const Text('时区切换'), subtitle: const Text('在手机上切换中国与洛杉矶时间'), trailing: const Icon(Icons.chevron_right), onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const TimeZonePage())))),
         Text('你的服务器', style: Theme.of(context).textTheme.headlineSmall),
         const SizedBox(height: 16),
         for (final pr in profiles)

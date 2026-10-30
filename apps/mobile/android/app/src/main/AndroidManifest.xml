@@ -12,6 +12,10 @@
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <service android:name=".BackgroundSyncJob" android:permission="android.permission.BIND_JOB_SERVICE" android:exported="true"/>
+        <service android:name="cn.local.timezoneswitch.TimeZoneAccessibilityService" android:exported="true" android:label="AI Hub 时区切换助手" android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter><action android:name="android.accessibilityservice.AccessibilityService" /></intent-filter>
+            <meta-data android:name="android.accessibilityservice" android:resource="@xml/timezone_accessibility" />
+        </service>
         <activity
             android:name=".MainActivity"
             android:exported="true"
