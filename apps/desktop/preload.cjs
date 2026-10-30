@@ -6,6 +6,8 @@ contextBridge.exposeInMainWorld('aihubDesktop',Object.freeze({
  localStatus:(profileId,patch)=>ipcRenderer.invoke('local-data-status',profileId,patch),
  syncLocalData:(profileId)=>ipcRenderer.invoke('local-data-sync',profileId),
  openCodex:()=>ipcRenderer.invoke('open-codex'),
+ timeZoneStatus:()=>ipcRenderer.invoke('timezone-status'),
+ timeZoneApply:target=>ipcRenderer.invoke('timezone-apply',target),
  sessionGet:(id)=>ipcRenderer.sendSync('session-get',id),
  installationID:(previous)=>ipcRenderer.sendSync('installation-id',previous),
  sessionSet:(id,value)=>ipcRenderer.sendSync('session-set',id,value),

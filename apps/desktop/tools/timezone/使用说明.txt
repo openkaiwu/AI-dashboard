@@ -1,0 +1,30 @@
+时区切换 Windows v1.0.0
+
+一、使用
+双击“时区切换.exe”，点击“切换到洛杉矶时间”或“切换到中国时间”。
+软件会切换整台电脑的系统时区，任务栏时间会随之更新。
+如果 Windows 弹出用户账户控制窗口，请选择“是”。取消授权会停止本次切换。
+
+二、时区规则
+洛杉矶：Windows Pacific Standard Time；冬季 UTC−8，夏季 UTC−7。
+中国：Windows China Standard Time；北京时间 UTC+8。
+夏令时采用电脑 Windows 时区数据库中的规则，请保持系统更新。
+快捷键：Alt + L 切换洛杉矶，Alt + C 切换中国。
+
+三、设置变化
+为避免系统根据位置改回时区，切换时会关闭 Windows 的“自动设置时区”。
+保留现有“自动设置时间”及网络校时设置。软件不修改实际 UTC 时间。
+如需恢复按位置自动设置时区，点击软件右下角的 Windows 日期和时间设置，重新开启“自动设置时区”。
+切换失败时会尝试恢复切换前的时区及自动时区设置；若恢复失败，界面会明确提示。
+软件不常驻后台，无开机自启、网络连接、账号、广告或数据上传。关闭窗口后系统时区仍保留。
+
+四、环境
+面向 Windows 10 / Windows 11，使用系统自带的 .NET Framework 4.8。
+免安装，将整个文件夹解压后运行。建议保留随附的 .exe.config。
+公司管理的电脑可能通过策略限制时区或服务设置；此时软件会报告失败。
+软件为本地构建，未附加商业代码签名。
+
+五、源码和构建
+源码位于工作目录 windows/src；在 PowerShell 执行 windows/build.ps1 可重新生成。
+Windows tzutil 官方说明：https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/tzutil
+Windows 自动时区设置说明：https://learn.microsoft.com/en-us/troubleshoot/windows-client/shell-experience/cannot-set-timezone-automatically

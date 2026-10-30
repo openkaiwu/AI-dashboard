@@ -1,6 +1,6 @@
 {
   "name": "aihub-desktop",
-  "version": "1.1.12",
+  "version": "1.1.13",
   "description": "AI Hub Codex quota companion",
   "homepage": "http://127.0.0.1:8080",
   "author": {
@@ -29,6 +29,8 @@
       "**/*",
       "!resources/bin/**",
       "!resources/ui/**",
+      "!resources/timezone/**",
+      "!tools/**",
       "!**/*.test.cjs",
       "!mode-preference.json",
       "!**/*.protected*",
@@ -40,6 +42,10 @@
       "!**/*.log"
     ],
     "extraResources": [
+      {
+        "from": "resources/timezone",
+        "to": "timezone"
+      },
       {
         "from": "resources/ui",
         "to": "ui"

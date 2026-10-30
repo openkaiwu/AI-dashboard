@@ -26,7 +26,7 @@ function scriptPolicy(html) {
   return ["'self'", ...new Set(hashes)].join(' ');
 }
 
-const routes = new Set(['/', '/login', '/notes', '/connections', '/cursor/connections', '/cursor', '/codex', '/dashboard', '/accounts/new', '/rules', '/inbox', '/devices', '/conversations', '/config', '/workspaces', '/promotions', '/admin', '/choose', '/desktop']);
+const routes = new Set(['/', '/login', '/notes', '/connections', '/cursor/connections', '/cursor', '/codex', '/dashboard', '/accounts/new', '/rules', '/inbox', '/devices', '/conversations', '/config', '/workspaces', '/promotions', '/admin', '/choose', '/desktop', '/timezone']);
 const types = {'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.svg':'image/svg+xml','.png':'image/png','.ico':'image/x-icon','.webmanifest':'application/manifest+json','.json':'application/json; charset=utf-8'};
 
 // Serve only bundled application files. API traffic retains the existing origin,

@@ -58,6 +58,9 @@ else {
   function assertSender(e){
    if(e.sender!==win.webContents||e.senderFrame!==win.webContents.mainFrame||!allowOrigin(e.senderFrame.url))throw Error('Unauthorized sender');
   }
+  const timeZone = require('./timeZoneTool.cjs').createController({root:app.isPackaged?process.resourcesPath:path.join(__dirname,'resources')});
+  ipcMain.handle('timezone-status',e=>{assertSender(e);return timeZone.status();});
+  ipcMain.handle('timezone-apply',(e,target)=>{assertSender(e);return timeZone.apply(target);});
   ipcMain.handle('bridge-status',e=>{assertSender(e);return runtime.bridgeStatus();});
   ipcMain.handle('bridge-control',async(e,action)=>{
    assertSender(e);

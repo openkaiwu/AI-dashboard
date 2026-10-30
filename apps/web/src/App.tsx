@@ -1,4 +1,4 @@
-import { Activity, ArrowUpRight, Bell, Blocks, ChevronDown, ChevronRight, FolderOpen, LayoutDashboard, LogOut, Menu, MessageSquare, Monitor, NotebookPen, Plug, Server, Settings2, ShieldCheck, Ticket, Users, Wrench, X, type LucideIcon } from "lucide-react";
+import { Activity, ArrowUpRight, Bell, Blocks, ChevronDown, ChevronRight, Clock3, FolderOpen, LayoutDashboard, LogOut, Menu, MessageSquare, Monitor, NotebookPen, Plug, Server, Settings2, ShieldCheck, Ticket, Users, Wrench, X, type LucideIcon } from "lucide-react";
 import ThemeSwitch from "./ThemeSwitch";
 import StrongReminders from "./StrongReminders";
 import { NavLink, Navigate, Outlet, Route, Routes, useNavigate, useLocation } from "react-router-dom";
@@ -23,6 +23,7 @@ import CursorConnections from "./pages/CursorConnections";
 import Admin from "./pages/Admin";
 import ModeSelect from "./pages/ModeSelect";
 import Desktop from "./pages/Desktop";
+import TimeZone from './pages/TimeZone';
 import CursorOverview from "./pages/CursorOverview";
 import { ActiveProvider, getActiveProvider, hasActiveProvider, setActiveProvider } from "./providerMode";
 import { flushManual, pendingManualCount, clearManualQueue } from "./manualQueue";
@@ -39,6 +40,7 @@ export default function App() {
           <Route path="/notes" element={<Sync />} />
           <Route path="/connections" element={<CodexConnections />} />
           <Route path="/desktop" element={<Desktop />} />
+          <Route path="/timezone" element={<TimeZone />} />
           <Route path="/cursor/connections" element={<CursorConnections />} />
           <Route path="/cursor" element={<CursorOverview />} />
           <Route path="/codex" element={<Codex />} />
@@ -76,6 +78,7 @@ function Shell() {
   const nav = useNavigate();
   const location = useLocation();
   const menuRef = useRef<HTMLDialogElement>(null);
+  const hasTimeZone = !!window.aihubDesktop?.timeZoneStatus && window.aihubDesktop?.info?.().platform === 'win32';
   const [online, setOnline] = useState(navigator.onLine);
   useEffect(() => {
     const update = () => setOnline(navigator.onLine);
@@ -148,7 +151,8 @@ function Shell() {
     { to: "/promotions", label: "优惠情报", icon: Ticket },
   ] : [];
   if (getSession()?.user.role === "admin") extra.push({ to: "/admin", label: "账户管理", icon: ShieldCheck });
-  const allItems = [...primary, ...connectionItems, ...extra];
+  const localTools: Item[] = hasTimeZone ? [{to:'/timezone',label:'时区切换',icon:Clock3}] : [];
+  const allItems = [...primary, ...connectionItems, ...localTools, ...extra];
   const currentPage = allItems.find(item => item.to === location.pathname)?.label || "工作空间";
   const renderLinks = (items: Item[]) => items.map(({ to, label, icon: Icon }) => (
     <NavLink key={to} to={to} end onClick={() => menuRef.current?.close()}><Icon size={18} aria-hidden="true"/><span>{label}</span></NavLink>
@@ -166,6 +170,7 @@ function Shell() {
         {modePicker}
         <div className="nav-group"><p className="nav-label">工作空间</p><nav className="nav">{renderLinks(primary)}</nav></div>
         <div className="nav-group"><p className="nav-label">连接与同步</p><nav className="nav">{renderLinks(connectionItems)}</nav></div>
+        {hasTimeZone && <div className="nav-group"><p className="nav-label">本机工具</p><nav className="nav">{renderLinks(localTools)}</nav></div>}
         {extra.length > 0 && <details className="nav-more" open={extra.some(item => item.to === location.pathname) || undefined}><summary><Blocks size={17} aria-hidden="true"/>更多工具<ChevronDown size={15} aria-hidden="true"/></summary><nav className="nav">{renderLinks(extra)}</nav></details>}
         <div className="side-foot">
           <div className="workspace-account"><div className="account-avatar" aria-hidden="true">{(getSession()?.user.email || "A").slice(0, 1).toUpperCase()}</div><div><strong>{profile().name}</strong><span>{getSession()?.user.email}</span></div></div>

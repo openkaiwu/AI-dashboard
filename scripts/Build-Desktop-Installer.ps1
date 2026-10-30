@@ -2,6 +2,7 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 & (Join-Path $root 'scripts/Stage-Desktop-UI.ps1')
 & (Join-Path $root 'scripts/Stage-Desktop-Binaries.ps1')
+& (Join-Path $root 'scripts/Stage-TimeZone-Tool.ps1')
 Push-Location (Join-Path $root 'apps/desktop')
 try {
     if (!(Test-Path 'node_modules/electron-builder')) {
@@ -10,7 +11,7 @@ try {
     }
     node (Join-Path $root 'scripts/run-desktop-render-test.cjs')
     if ($LASTEXITCODE -ne 0) { throw 'Desktop UI did not render in Electron; refusing to package' }
-    npm run dist
+    npm run dist -- --config.electronDist=node_modules/electron/dist
     if ($LASTEXITCODE -ne 0) { throw 'desktop installer build failed' }
     node (Join-Path $root 'scripts/run-desktop-render-test.cjs') (Join-Path $root 'artifacts/desktop/installer/win-unpacked')
     if ($LASTEXITCODE -ne 0) { throw 'Packaged desktop UI did not render in Electron; refusing release metadata' }

@@ -3,6 +3,8 @@ type Popup = { title: string; body: string; provider?: string };
 declare global { interface Window { aihubDesktop?: {
   info?: () => {version:string;bundledUI:boolean;platform:string};
   alert: (value: Popup) => Promise<string>; openCodex: () => Promise<void>;
+  timeZoneStatus?: () => Promise<import('./pages/TimeZone').TimeZoneState>;
+  timeZoneApply?: (target:'cn'|'la') => Promise<{success:boolean;message:string;state:import('./pages/TimeZone').TimeZoneState}>;
   openDashboard?: () => Promise<void>; sessionGet: (id: string) => import('./session').Session | null;
   sessionSet: (id: string, value: import('./session').Session | null) => boolean;
   installationID?: (previous: string | null) => string; extensionPairCode: () => Promise<string>;
